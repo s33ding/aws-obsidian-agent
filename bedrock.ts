@@ -8,7 +8,7 @@ import {
 	ToolConfiguration,
 } from "@aws-sdk/client-bedrock-runtime";
 import { AgentLanguage, AgentSettings } from "./settings";
-import { NoteEdit } from "./edit";
+import { NoteEdit, toNoteEdit } from "./edit";
 
 export interface ChatTurn {
 	role: "user" | "assistant";
@@ -122,20 +122,28 @@ export class BedrockService {
 			toolSpec: {
 				name: "edit_note",
 				description:
-					"Edit the user's active Obsidian note. Use this whenever the user asks to write, add, change, fix, rewrite, or remove text in the note. Prefer 'replace' for targeted changes and 'append'/'prepend' to add text; use 'replace_all' only to rewrite the whole note.",
+					"Edit the user's active Obsidian markdown note. Use whenever the user asks to write, add, change, fix, rewrite, check off, or organize content. Choose the most structural operation that fits: add_list_item for bullets/tasks, insert_under_heading to put content in a section, toggle_task to check/uncheck, replace for targeted text edits, append/prepend to add at the ends, replace_all only to rewrite the whole note.",
 				inputSchema: {
 					json: {
 						type: "object",
 						properties: {
 							op: {
 								type: "string",
-								enum: ["append", "prepend", "replace", "replace_all"],
-								description: "The kind of edit to perform.",
+								enum: [
+									"append",
+									"prepend",
+									"replace",
+									"replace_all",
+									"insert_under_heading",
+									"add_list_item",
+									"toggle_task",
+								],
+								description: "The kind of markdown edit to perform.",
 							},
 							content: {
 								type: "string",
 								description:
-									"Text to add (for append/prepend) or the full new note (for replace_all).",
+									"Markdown text. For append/prepend/replace_all, or the body for insert_under_heading.",
 							},
 							find: {
 								type: "string",
@@ -144,6 +152,23 @@ export class BedrockService {
 							with: {
 								type: "string",
 								description: "For 'replace': the text to replace it with.",
+							},
+							heading: {
+								type: "string",
+								description:
+									"Heading title (without #) for insert_under_heading, or optional section for add_list_item.",
+							},
+							text: {
+								type: "string",
+								description: "For add_list_item/toggle_task: the item or task text.",
+							},
+							task: {
+								type: "boolean",
+								description: "For add_list_item: true to make it a checkbox task '- [ ]'.",
+							},
+							checked: {
+								type: "boolean",
+								description: "For toggle_task: true to check, false to uncheck.",
 							},
 						},
 						required: ["op"],
@@ -303,26 +328,6 @@ export class BedrockService {
 			throw new Error("Bedrock returned an empty response.");
 		}
 		return result;
-	}
-}
-
-/** Convert a tool_use input object into a validated NoteEdit, or null. */
-function toNoteEdit(input: unknown): NoteEdit | null {
-	if (!input || typeof input !== "object") return null;
-	const o = input as Record<string, unknown>;
-	switch (o.op) {
-		case "replace_all":
-			return typeof o.content === "string" ? { op: "replace_all", content: o.content } : null;
-		case "append":
-			return typeof o.content === "string" ? { op: "append", content: o.content } : null;
-		case "prepend":
-			return typeof o.content === "string" ? { op: "prepend", content: o.content } : null;
-		case "replace":
-			return typeof o.find === "string" && typeof o.with === "string"
-				? { op: "replace", find: o.find, with: o.with }
-				: null;
-		default:
-			return null;
 	}
 }
 
