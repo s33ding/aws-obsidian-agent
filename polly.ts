@@ -53,6 +53,12 @@ export class PollyService {
 		return lang === "pt-BR" ? this.settings.voicePtBr : this.settings.voiceEnUs;
 	}
 
+	private engineValue(): Engine {
+		// Use the literal engine string; the installed SDK enum may predate
+		// "generative"/"long-form", but the service accepts these values.
+		return this.settings.engine as Engine;
+	}
+
 	/** Synthesize `text` in the given language and return playable audio bytes. */
 	async synthesize(text: string, lang: AgentLanguage): Promise<Uint8Array> {
 		const client = this.getClient();
@@ -62,7 +68,7 @@ export class PollyService {
 			OutputFormat: OutputFormat.MP3,
 			VoiceId: this.voiceFor(lang) as VoiceId,
 			LanguageCode: lang,
-			Engine: this.settings.engine === "neural" ? Engine.NEURAL : Engine.STANDARD,
+			Engine: this.engineValue(),
 		});
 
 		const response = await client.send(command);

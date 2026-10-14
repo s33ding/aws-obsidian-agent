@@ -174,12 +174,18 @@ class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Polly engine")
-			.setDesc("Neural sounds more natural; standard is cheaper.")
+			.setDesc("Generative is the most natural. Neural is a good balance; standard is cheapest. Availability depends on the selected voice.")
 			.addDropdown((dd) => {
+				dd.addOption("generative", "Generative (most natural)");
+				dd.addOption("long-form", "Long-form");
 				dd.addOption("neural", "Neural");
 				dd.addOption("standard", "Standard");
 				dd.setValue(this.plugin.settings.engine).onChange(async (v) => {
-					this.plugin.settings.engine = v as "standard" | "neural";
+					this.plugin.settings.engine = v as
+						| "standard"
+						| "neural"
+						| "generative"
+						| "long-form";
 					await this.plugin.saveSettings();
 				});
 			});
