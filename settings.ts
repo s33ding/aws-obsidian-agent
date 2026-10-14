@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	awsSecretAccessKey: "",
 	awsSessionToken: "",
 	useAmbientCredentials: true,
-	language: "en-US",
+	language: "pt-BR",
 	voicePtBr: "Camila",
 	voiceEnUs: "Joanna",
 	engine: "generative",
@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	maxNoteChars: 6000,
 	allowEditing: true,
 	confirmEdits: false,
-	autoDetectLanguage: true,
+	autoDetectLanguage: false,
 };
 
 // Bedrock models verified available in the account (Converse-compatible).
