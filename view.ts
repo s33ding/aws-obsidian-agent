@@ -2,7 +2,11 @@ import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
 import { Agent } from "./agent";
 import { PollyService } from "./polly";
 import { AgentLanguage, AgentSettings, LANGUAGE_LABELS } from "./settings";
-import { SpeechInput, isSpeechRecognitionSupported } from "./speech";
+import {
+	SpeechInput,
+	isSpeechRecognitionSupported,
+	listAudioInputDevices,
+} from "./speech";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -10,28 +14,33 @@ export class AgentView extends ItemView {
 	private agent: Agent;
 	private polly: PollyService;
 	private settings: AgentSettings;
+	private saveSettings: () => Promise<void>;
 
 	private messagesEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
 	private langSelectEl!: HTMLSelectElement;
+	private deviceSelectEl!: HTMLSelectElement;
 	private talkBtn!: HTMLButtonElement;
 	private statusEl!: HTMLElement;
+	private meterEl!: HTMLElement;
+	private meterFillEl!: HTMLElement;
 
 	private speech: SpeechInput | null = null;
 	private talkOn = false;
-	/** True while the agent is generating/speaking a reply. */
 	private busy = false;
 
 	constructor(
 		leaf: WorkspaceLeaf,
 		settings: AgentSettings,
 		agent: Agent,
-		polly: PollyService
+		polly: PollyService,
+		saveSettings: () => Promise<void>
 	) {
 		super(leaf);
 		this.settings = settings;
 		this.agent = agent;
 		this.polly = polly;
+		this.saveSettings = saveSettings;
 	}
 
 	getViewType(): string {
@@ -51,7 +60,7 @@ export class AgentView extends ItemView {
 		container.empty();
 		container.addClass("aws-agent-view");
 
-		// Header with language switcher.
+		// Header: language + device selectors.
 		const header = container.createDiv({ cls: "aws-agent-header" });
 		header.createSpan({ text: "Agent", cls: "aws-agent-title" });
 
@@ -64,12 +73,30 @@ export class AgentView extends ItemView {
 			if (lang === this.settings.language) opt.selected = true;
 		});
 		this.langSelectEl.addEventListener("change", () => {
-			const lang = this.langSelectEl.value as AgentLanguage;
-			this.setLanguage(lang);
+			this.setLanguage(this.langSelectEl.value as AgentLanguage);
 		});
 
 		const stopBtn = header.createEl("button", { text: "Stop audio", cls: "aws-agent-stop" });
 		stopBtn.addEventListener("click", () => this.polly.stop());
+
+		// Device row (microphone selector + live meter).
+		const deviceRow = container.createDiv({ cls: "aws-agent-device-row" });
+		deviceRow.createSpan({ text: "🎙️", cls: "aws-agent-device-icon" });
+		this.deviceSelectEl = deviceRow.createEl("select", { cls: "aws-agent-device" });
+		this.deviceSelectEl.createEl("option", { text: "Default microphone", value: "" });
+		this.deviceSelectEl.addEventListener("change", () => {
+			const id = this.deviceSelectEl.value;
+			this.settings.inputDeviceId = id;
+			void this.saveSettings();
+			this.speech?.setDevice(id || undefined);
+		});
+
+		// Live mic level meter (animation).
+		this.meterEl = deviceRow.createDiv({ cls: "aws-agent-meter" });
+		this.meterFillEl = this.meterEl.createDiv({ cls: "aws-agent-meter-fill" });
+		this.setLevel(0);
+
+		void this.populateDevices();
 
 		// Messages area.
 		this.messagesEl = container.createDiv({ cls: "aws-agent-messages" });
@@ -80,13 +107,12 @@ export class AgentView extends ItemView {
 
 		// Input row with Talk mode toggle.
 		const inputRow = container.createDiv({ cls: "aws-agent-input-row" });
-
 		this.talkBtn = inputRow.createEl("button", {
 			cls: "aws-agent-talk",
 			attr: { "aria-label": "Toggle talk mode" },
 		});
 		this.updateTalkButton();
-		this.talkBtn.addEventListener("click", () => this.toggleTalk());
+		this.talkBtn.addEventListener("click", () => void this.toggleTalk());
 
 		this.inputEl = inputRow.createEl("textarea", {
 			cls: "aws-agent-input",
@@ -109,9 +135,8 @@ export class AgentView extends ItemView {
 			void this.speak(greeting.text, greeting.lang);
 		}
 
-		// Auto-start talk mode if enabled in settings.
 		if (this.settings.talkMode) {
-			this.startTalk();
+			void this.startTalk();
 		}
 	}
 
@@ -125,79 +150,115 @@ export class AgentView extends ItemView {
 		this.settings.language = lang;
 		this.agent.setLanguage(lang);
 		this.speech?.setLanguage(lang);
+		void this.saveSettings();
 		if (this.langSelectEl && this.langSelectEl.value !== lang) {
 			this.langSelectEl.value = lang;
 		}
+		this.updateTalkButton();
 		const note =
 			lang === "pt-BR" ? "Idioma alterado para Português." : "Language switched to English.";
 		this.addMessage("system", note);
 	}
 
+	// ---- Devices + meter ---------------------------------------------------
+
+	private async populateDevices(): Promise<void> {
+		try {
+			const devices = await listAudioInputDevices();
+			// Clear all but the default option.
+			while (this.deviceSelectEl.options.length > 1) {
+				this.deviceSelectEl.remove(1);
+			}
+			devices.forEach((d) => {
+				const opt = this.deviceSelectEl.createEl("option", {
+					text: d.label,
+					value: d.deviceId,
+				});
+				if (d.deviceId === this.settings.inputDeviceId) opt.selected = true;
+			});
+		} catch (err) {
+			console.error("Failed to enumerate devices", err);
+		}
+	}
+
+	private setLevel(level: number): void {
+		const pct = Math.round(Math.max(0, Math.min(1, level)) * 100);
+		this.meterFillEl.style.width = `${pct}%`;
+		this.talkBtn?.toggleClass("is-loud", level > 0.2);
+	}
+
 	// ---- Talk mode ---------------------------------------------------------
 
-	private toggleTalk(): void {
-		if (this.talkOn) {
-			this.stopTalk();
-		} else {
-			this.startTalk();
-		}
+	private async toggleTalk(): Promise<void> {
+		if (this.talkOn) this.stopTalk();
+		else await this.startTalk();
 	}
 
 	/** Public entry for the command palette toggle. */
 	toggleTalkPublic(): void {
-		this.toggleTalk();
+		void this.toggleTalk();
 	}
 
-	private startTalk(): void {
+	private async startTalk(): Promise<void> {
 		if (this.talkOn) return;
 
-		if (!isSpeechRecognitionSupported()) {
-			new Notice("Speech recognition is not available in this environment.");
-			this.addMessage(
-				"system",
-				this.settings.language === "pt-BR"
-					? "Reconhecimento de voz indisponível neste ambiente."
-					: "Speech recognition is unavailable here."
-			);
-			return;
-		}
-
-		this.speech = new SpeechInput(this.settings.language, {
-			onFinal: (text) => this.onUtterance(text),
-			onInterim: (text) => this.showInterim(text),
-			onStart: () => this.setListeningUI(true),
-			onEnd: () => this.setListeningUI(false),
-			onError: (err) => {
-				if (err === "not-allowed" || err === "service-not-allowed") {
-					new Notice("Microphone permission denied.");
-					this.stopTalk();
-				}
+		this.speech = new SpeechInput(
+			this.settings.language,
+			{
+				onFinal: (text) => this.onUtterance(text),
+				onInterim: (text) => this.showInterim(text),
+				onLevel: (lvl) => this.setLevel(lvl),
+				onStart: () => this.setListeningUI(true),
+				onEnd: () => this.setListeningUI(false),
+				onError: (err) => this.onSpeechError(err),
 			},
-		});
+			{
+				deviceId: this.settings.inputDeviceId || undefined,
+				silenceMs: this.settings.silenceMs,
+			}
+		);
+
+		if (!isSpeechRecognitionSupported()) {
+			// Metering/VAD can still work; warn that transcription may be off.
+			new Notice("Speech recognition engine not found; voice capture may be limited.");
+		}
 
 		this.talkOn = true;
 		this.settings.talkMode = true;
-		this.speech.start();
+		void this.saveSettings();
 		this.updateTalkButton();
-		this.setListeningUI(true);
+		await this.speech.start();
+		// Re-populate device labels (labels are only exposed after permission).
+		void this.populateDevices();
 	}
 
 	private stopTalk(): void {
 		this.talkOn = false;
 		this.settings.talkMode = false;
+		void this.saveSettings();
 		this.speech?.stop();
 		this.speech = null;
 		this.updateTalkButton();
 		this.setListeningUI(false);
+		this.setLevel(0);
 		this.statusEl.hide();
 	}
 
-	/** Called when the recognizer produces a final utterance. */
+	private onSpeechError(err: string): void {
+		if (err === "not-allowed" || err === "service-not-allowed") {
+			new Notice("Microphone permission denied.");
+			this.stopTalk();
+			return;
+		}
+		if (err.startsWith("mic error")) {
+			new Notice(err);
+			this.stopTalk();
+		}
+	}
+
 	private onUtterance(text: string): void {
 		const trimmed = text.trim();
-		if (!trimmed) return;
-		// Ignore speech captured while the agent is busy/speaking.
-		if (this.busy) return;
+		if (!trimmed || this.busy) return;
 		this.statusEl.hide();
 		void this.handleSend(trimmed);
 	}
@@ -223,11 +284,8 @@ export class AgentView extends ItemView {
 	}
 
 	private updateTalkButton(): void {
-		const pt = this.settings.language === "pt-BR";
 		this.talkBtn.toggleClass("is-active", this.talkOn);
-		this.talkBtn.setText(
-			this.talkOn ? (pt ? "🎙️ Talk: ON" : "🎙️ Talk: ON") : (pt ? "🎤 Talk" : "🎤 Talk")
-		);
+		this.talkBtn.setText(this.talkOn ? "🎙️ Talk: ON" : "🎤 Talk");
 	}
 
 	// ---- Messaging ---------------------------------------------------------
@@ -237,10 +295,7 @@ export class AgentView extends ItemView {
 		if (!text || this.busy) return;
 		this.inputEl.value = "";
 		this.busy = true;
-
-		// While processing/speaking, suspend the mic to avoid feedback.
 		this.speech?.suspend();
-
 		this.addMessage("user", text);
 
 		try {
@@ -254,16 +309,12 @@ export class AgentView extends ItemView {
 			this.addMessage("system", `Error: ${(err as Error).message}`);
 		} finally {
 			this.busy = false;
-			// Resume listening after we finished speaking.
-			if (this.talkOn) {
-				this.speech?.resume();
-			}
+			if (this.talkOn) this.speech?.resume();
 		}
 	}
 
 	private async speak(text: string, lang: AgentLanguage): Promise<void> {
 		try {
-			// Make sure the mic is suspended during playback.
 			this.speech?.suspend();
 			await this.polly.speak(text, lang);
 		} catch (err) {

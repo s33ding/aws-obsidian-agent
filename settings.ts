@@ -12,6 +12,8 @@ export interface AgentSettings {
 	engine: "standard" | "neural";
 	speakResponses: boolean;
 	talkMode: boolean;
+	inputDeviceId: string;
+	silenceMs: number;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -26,6 +28,8 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	engine: "neural",
 	speakResponses: true,
 	talkMode: false,
+	inputDeviceId: "",
+	silenceMs: 1500,
 };
 
 // Common Polly voices per locale. These are the neural-capable voices

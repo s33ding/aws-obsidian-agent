@@ -23,7 +23,14 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 
 		this.registerView(
 			VIEW_TYPE_AGENT,
-			(leaf) => new AgentView(leaf, this.settings, this.agent, this.polly)
+			(leaf) =>
+				new AgentView(
+					leaf,
+					this.settings,
+					this.agent,
+					this.polly,
+					() => this.saveSettings()
+				)
 		);
 
 		this.addRibbonIcon("bot", "Open AWS Agent", () => {
@@ -148,6 +155,20 @@ class AgentSettingTab extends PluginSettingTab {
 					this.plugin.settings.talkMode = v;
 					await this.plugin.saveSettings();
 				})
+			);
+
+		new Setting(containerEl)
+			.setName("End-of-turn silence (ms)")
+			.setDesc("How long of a pause ends your turn and sends what you said. Lower = snappier.")
+			.addSlider((s) =>
+				s
+					.setLimits(600, 3000, 100)
+					.setValue(this.plugin.settings.silenceMs)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.silenceMs = v;
+						await this.plugin.saveSettings();
+					})
 			);
 
 		new Setting(containerEl)

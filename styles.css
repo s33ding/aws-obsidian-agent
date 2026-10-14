@@ -100,3 +100,34 @@
 	padding: 2px 4px;
 	min-height: 1.2em;
 }
+
+.aws-agent-device-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.aws-agent-device {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.aws-agent-meter {
+	width: 70px;
+	height: 8px;
+	border-radius: 4px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+	flex: 0 0 auto;
+}
+
+.aws-agent-meter-fill {
+	height: 100%;
+	width: 0%;
+	background: var(--interactive-accent);
+	transition: width 0.06s linear;
+}
+
+.aws-agent-talk.is-loud {
+	box-shadow: 0 0 0 3px rgba(80, 200, 120, 0.5);
+}
