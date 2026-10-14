@@ -1,0 +1,25 @@
+{
+	"name": "aws-obsidian-agent",
+	"version": "0.1.0",
+	"description": "Conversational agent with AWS Polly text-to-speech for Obsidian.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"typecheck": "tsc -noEmit -skipLibCheck"
+	},
+	"keywords": ["obsidian", "plugin", "aws", "polly", "tts", "agent"],
+	"author": "s33ding",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "20.11.30",
+		"builtin-modules": "3.3.0",
+		"esbuild": "0.20.2",
+		"obsidian": "1.5.7",
+		"tslib": "2.6.2",
+		"typescript": "5.4.3"
+	},
+	"dependencies": {
+		"@aws-sdk/client-polly": "3.556.0"
+	}
+}

@@ -1,0 +1,74 @@
+.aws-agent-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 8px;
+	gap: 8px;
+}
+
+.aws-agent-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.aws-agent-title {
+	font-weight: 600;
+	margin-right: auto;
+}
+
+.aws-agent-messages {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+}
+
+.aws-agent-msg {
+	display: flex;
+	max-width: 90%;
+}
+
+.aws-agent-msg-text {
+	padding: 6px 10px;
+	border-radius: 10px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.aws-agent-msg-user {
+	align-self: flex-end;
+}
+
+.aws-agent-msg-user .aws-agent-msg-text {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.aws-agent-msg-agent .aws-agent-msg-text {
+	background: var(--background-secondary);
+}
+
+.aws-agent-msg-system {
+	align-self: center;
+	opacity: 0.7;
+	font-size: 0.85em;
+	font-style: italic;
+}
+
+.aws-agent-input-row {
+	display: flex;
+	gap: 6px;
+	align-items: flex-end;
+}
+
+.aws-agent-input {
+	flex: 1 1 auto;
+	resize: vertical;
+	min-height: 2.4em;
+	font-family: inherit;
+}

@@ -1,0 +1,10 @@
+{
+	"id": "aws-obsidian-agent",
+	"name": "AWS Obsidian Agent",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Conversational agent with AWS Polly text-to-speech. Switch between pt-BR and en-US.",
+	"author": "s33ding",
+	"authorUrl": "https://github.com/s33ding",
+	"isDesktopOnly": true
+}
