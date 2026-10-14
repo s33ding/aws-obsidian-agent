@@ -1,6 +1,7 @@
 import {
 	BedrockRuntimeClient,
 	ConverseCommand,
+	ConverseStreamCommand,
 	ConversationRole,
 	Message,
 } from "@aws-sdk/client-bedrock-runtime";
@@ -97,4 +98,89 @@ export class BedrockService {
 		}
 		return text;
 	}
+
+	/**
+	 * Streaming variant. Invokes the model with ConverseStream and calls
+	 * `onSentence` as soon as each complete sentence is available, so callers
+	 * can start synthesizing/playing audio before the full reply is generated.
+	 * Returns the full concatenated reply when the stream completes.
+	 */
+	async converseStream(
+		userText: string,
+		history: ChatTurn[],
+		lang: AgentLanguage,
+		onSentence: (sentence: string) => void
+	): Promise<string> {
+		const messages: Message[] = [];
+		for (const turn of history) {
+			messages.push({
+				role: turn.role === "user" ? ConversationRole.USER : ConversationRole.ASSISTANT,
+				content: [{ text: turn.text }],
+			});
+		}
+		messages.push({ role: ConversationRole.USER, content: [{ text: userText }] });
+
+		const command = new ConverseStreamCommand({
+			modelId: this.settings.bedrockModelId,
+			messages,
+			system: [{ text: this.systemPrompt(lang) }],
+			inferenceConfig: {
+				maxTokens: this.settings.maxTokens,
+				temperature: this.settings.temperature,
+			},
+		});
+
+		const response = await this.getClient().send(command);
+		if (!response.stream) {
+			throw new Error("Bedrock returned no stream.");
+		}
+
+		let full = "";
+		let buffer = "";
+
+		for await (const event of response.stream) {
+			const delta = event.contentBlockDelta?.delta?.text;
+			if (!delta) continue;
+			full += delta;
+			buffer += delta;
+
+			// Emit complete sentences as soon as a boundary appears.
+			let boundary = findSentenceBoundary(buffer);
+			while (boundary > 0) {
+				const sentence = buffer.slice(0, boundary).trim();
+				if (sentence) onSentence(sentence);
+				buffer = buffer.slice(boundary);
+				boundary = findSentenceBoundary(buffer);
+			}
+		}
+
+		// Flush any trailing text that didn't end with punctuation.
+		const tail = buffer.trim();
+		if (tail) onSentence(tail);
+
+		const result = full.trim();
+		if (!result) {
+			throw new Error("Bedrock returned an empty response.");
+		}
+		return result;
+	}
 }
+
+/**
+ * Return the index just past the first sentence-ending boundary in `text`,
+ * or 0 if none. Avoids splitting on decimals/abbreviations crudely by
+ * requiring the punctuation to be followed by a space or end of buffer.
+ */
+function findSentenceBoundary(text: string): number {
+	for (let i = 0; i < text.length; i++) {
+		const c = text[i];
+		if (c === "." || c === "!" || c === "?" || c === "\n") {
+			const next = text[i + 1];
+			if (next === undefined || next === " " || next === "\n") {
+				return i + 1;
+			}
+		}
+	}
+	return 0;
+}
+

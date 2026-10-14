@@ -17,6 +17,12 @@ export class PollyService {
 	private settingsSnapshot = "";
 	private currentAudio: HTMLAudioElement | null = null;
 
+	// Pipelined playback queue: each item is a promise resolving to audio bytes
+	// (synthesis may still be in flight) so we can prefetch while playing.
+	private queue: Promise<Uint8Array>[] = [];
+	private playing = false;
+	private stopped = false;
+
 	constructor(private settings: AgentSettings) {}
 
 	/** Rebuild the client only when relevant settings change. */
@@ -104,9 +110,81 @@ export class PollyService {
 		});
 	}
 
-	/** Stop any currently playing audio. */
+	/**
+	 * Streaming/pipelined speech. Call `beginStream()`, then `enqueue()` each
+	 * sentence as it arrives from the model (synthesis starts immediately and
+	 * in parallel), then `endStream()` to await full playback. The first
+	 * sentence starts playing as soon as its audio is ready — no need to wait
+	 * for the whole reply.
+	 */
+	beginStream(): void {
+		this.stop();
+		this.stopped = false;
+		this.queue = [];
+	}
+
+	/** Queue a sentence for synthesis + sequential playback. */
+	enqueue(text: string, lang: AgentLanguage): void {
+		if (this.stopped) return;
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		// Kick off synthesis immediately (parallel prefetch).
+		this.queue.push(this.synthesize(trimmed, lang));
+		if (!this.playing) void this.drainQueue();
+	}
+
+	/** Wait until the queue has fully drained (all audio played). */
+	async endStream(): Promise<void> {
+		// Poll until playback finishes or we're stopped.
+		while ((this.playing || this.queue.length > 0) && !this.stopped) {
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+
+	private async drainQueue(): Promise<void> {
+		this.playing = true;
+		try {
+			while (this.queue.length > 0 && !this.stopped) {
+				const bytesPromise = this.queue.shift()!;
+				let bytes: Uint8Array;
+				try {
+					bytes = await bytesPromise;
+				} catch (err) {
+					console.error("Polly synthesis failed for a sentence:", err);
+					continue;
+				}
+				if (this.stopped) return;
+				await this.playBytes(bytes);
+			}
+		} finally {
+			this.playing = false;
+		}
+	}
+
+	private playBytes(bytes: Uint8Array): Promise<void> {
+		const blob = new Blob([bytes], { type: "audio/mpeg" });
+		const url = URL.createObjectURL(blob);
+		const audio = new Audio(url);
+		this.currentAudio = audio;
+		return new Promise<void>((resolve) => {
+			const done = () => {
+				URL.revokeObjectURL(url);
+				if (this.currentAudio === audio) this.currentAudio = null;
+				resolve();
+			};
+			audio.onended = done;
+			audio.onerror = done;
+			void audio.play().catch(done);
+		});
+	}
+
+	/** Stop any currently playing audio and clear the queue. */
 	stop(): void {
+		this.stopped = true;
+		this.queue = [];
 		if (this.currentAudio) {
+			this.currentAudio.onended = null;
+			this.currentAudio.onerror = null;
 			this.currentAudio.pause();
 			this.currentAudio.currentTime = 0;
 			this.currentAudio = null;

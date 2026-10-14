@@ -75,6 +75,47 @@ export class Agent {
 		return { text: this.ruleBasedReply(msg), lang: this.lang };
 	}
 
+	/**
+	 * Streaming reply: calls `onSentence` as each sentence is generated so the
+	 * caller can synthesize/play audio incrementally. Returns the full reply.
+	 * Falls back to a single non-streamed sentence if Bedrock is off/errors.
+	 */
+	async respondStream(
+		message: string,
+		onSentence: (sentence: string) => void
+	): Promise<AgentReply> {
+		const msg = message.trim();
+		if (!msg) {
+			const t = this.lang === "pt-BR" ? "Diga alguma coisa." : "Say something.";
+			onSentence(t);
+			return { text: t, lang: this.lang };
+		}
+
+		if (this.settings.useBedrock) {
+			try {
+				const reply = await this.bedrock.converseStream(
+					msg,
+					this.history,
+					this.lang,
+					onSentence
+				);
+				this.history.push({ role: "user", text: msg });
+				this.history.push({ role: "assistant", text: reply });
+				this.trimHistory();
+				return { text: reply, lang: this.lang };
+			} catch (err) {
+				console.error("Bedrock stream error, falling back to rules:", err);
+				const t = this.ruleBasedReply(msg);
+				onSentence(t);
+				return { text: t, lang: this.lang };
+			}
+		}
+
+		const t = this.ruleBasedReply(msg);
+		onSentence(t);
+		return { text: t, lang: this.lang };
+	}
+
 	/** Keep the last N turns to bound token usage. */
 	private trimHistory(): void {
 		const MAX_TURNS = 20; // 10 exchanges

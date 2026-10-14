@@ -298,12 +298,27 @@ export class AgentView extends ItemView {
 		this.speech?.suspend();
 		this.addMessage("user", text);
 
+		const lang = this.settings.language;
+		const speak = this.settings.speakResponses;
+
+		// Create a live agent message bubble we append sentences to.
+		const bubble = this.addMessage("agent", "");
+
+		if (speak) this.polly.beginStream();
+
 		try {
-			const reply = await this.agent.respond(text);
-			this.addMessage("agent", reply.text);
-			if (this.settings.speakResponses) {
-				await this.speak(reply.text, reply.lang);
-			}
+			const reply = await this.agent.respondStream(text, (sentence) => {
+				// Append to the visible bubble as it streams in.
+				bubble.textContent = (bubble.textContent
+					? bubble.textContent + " "
+					: "") + sentence;
+				this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+				// Pipe each sentence into the audio queue immediately.
+				if (speak) this.polly.enqueue(sentence, lang);
+			});
+			// Ensure final text matches the full reply.
+			bubble.textContent = reply.text;
+			if (speak) await this.polly.endStream();
 		} catch (err) {
 			console.error(err);
 			this.addMessage("system", `Error: ${(err as Error).message}`);
@@ -324,9 +339,10 @@ export class AgentView extends ItemView {
 		}
 	}
 
-	private addMessage(role: "user" | "agent" | "system", text: string): void {
+	private addMessage(role: "user" | "agent" | "system", text: string): HTMLElement {
 		const row = this.messagesEl.createDiv({ cls: `aws-agent-msg aws-agent-msg-${role}` });
-		row.createDiv({ cls: "aws-agent-msg-text", text });
+		const textEl = row.createDiv({ cls: "aws-agent-msg-text", text });
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+		return textEl;
 	}
 }
