@@ -289,6 +289,7 @@ export class AgentView extends ItemView {
 
 	private onUtterance(text: string): void {
 		const trimmed = text.trim();
+		console.log(`[agent] onUtterance: "${trimmed}" busy=${this.busy}`);
 		if (!trimmed || this.busy) return;
 		this.statusEl.hide();
 		void this.handleSend(trimmed);
@@ -359,6 +360,7 @@ export class AgentView extends ItemView {
 			if (speak) await this.polly.endStream();
 
 			// Apply a structured note edit if the agent produced one.
+			console.log("[agent] reply.edit =", JSON.stringify(reply.edit));
 			if (reply.edit) {
 				await this.handleEdits([reply.edit]);
 			}

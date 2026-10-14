@@ -1,5 +1,6 @@
 import { AgentLanguage, AgentSettings } from "./settings";
 import { TranscribeStream } from "./transcribe";
+import { workletModuleUrl, TARGET_RATE } from "./worklet";
 
 export interface AudioInputDevice {
 	deviceId: string;
@@ -66,6 +67,7 @@ export class SpeechInput {
 	private audioCtx: AudioContext | null = null;
 	private analyser: AnalyserNode | null = null;
 	private processor: ScriptProcessorNode | null = null;
+	private workletNode: AudioWorkletNode | null = null;
 	private sourceNode: MediaStreamAudioSourceNode | null = null;
 	private levelRaf: number | null = null;
 
@@ -84,6 +86,7 @@ export class SpeechInput {
 	private bargeInLoudMs = 0;
 	private bargeInFired = false;
 	private lastTickTs = 0;
+	private bargeInLogCount = 0;
 
 	constructor(
 		lang: AgentLanguage,
@@ -192,30 +195,82 @@ export class SpeechInput {
 			window.AudioContext ||
 			(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 		this.audioCtx = new Ctx();
+		// Autoplay policy can start the context suspended; resume it so audio
+		// actually flows (fixes "no audio captured").
+		if (this.audioCtx.state === "suspended") {
+			try {
+				await this.audioCtx.resume();
+			} catch (e) {
+				console.warn("[agent] audioCtx.resume failed", e);
+			}
+		}
+		console.log("[agent] audioCtx state:", this.audioCtx.state, "sampleRate:", this.audioCtx.sampleRate);
 		this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
 
-		// Analyser for the level meter.
-		this.analyser = this.audioCtx.createAnalyser();
-		this.analyser.fftSize = 512;
-		this.analyser.smoothingTimeConstant = 0.6;
-		this.sourceNode.connect(this.analyser);
+		// Load the AudioWorklet (runs capture + level on the audio thread, off
+		// the main thread) so UI/Polly/Bedrock never block microphone capture.
+		try {
+			const url = workletModuleUrl();
+			await this.audioCtx.audioWorklet.addModule(url);
+			URL.revokeObjectURL(url);
+			this.workletNode = new AudioWorkletNode(this.audioCtx, "capture-processor", {
+				numberOfInputs: 1,
+				numberOfOutputs: 0,
+				channelCount: 1,
+			});
+			let frameLog = 0;
+			this.workletNode.port.onmessage = (ev: MessageEvent) => {
+				const msg = ev.data as
+					| { type: "audio"; samples: Float32Array }
+					| { type: "level"; rms: number };
+				if (msg.type === "level") {
+					this.onAudioLevel(msg.rms);
+				} else if (msg.type === "audio") {
+					if (!this.active || this.suspended) return;
+					if (frameLog++ % 25 === 0) {
+						let peak = 0;
+						for (let i = 0; i < msg.samples.length; i++)
+							peak = Math.max(peak, Math.abs(msg.samples[i]));
+						console.log(
+							`[agent] worklet frame peak=${peak.toFixed(3)} transcribeRunning=${this.transcribe.isRunning()}`
+						);
+					}
+					if (this.transcribe.isRunning()) {
+						// Worklet already downsampled to TARGET_RATE (16 kHz).
+						this.transcribe.pushAudio(msg.samples, TARGET_RATE);
+					}
+				}
+			};
+			this.sourceNode.connect(this.workletNode);
+			console.log("[agent] AudioWorklet capture started");
+		} catch (err) {
+			console.error("[agent] AudioWorklet failed, falling back to ScriptProcessor", err);
+			this.startScriptProcessorFallback();
+		}
 
-		// ScriptProcessor to tap raw PCM frames for Transcribe.
-		this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
-		this.processor.onaudioprocess = (e: AudioProcessingEvent) => {
-			if (!this.active || this.suspended) return;
+		this.callbacks.onStart?.();
+	}
+
+	/** Legacy capture path if AudioWorklet is unavailable. */
+	private startScriptProcessorFallback(): void {
+		if (!this.audioCtx || !this.sourceNode) return;
+		const processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
+		processor.onaudioprocess = (e: AudioProcessingEvent) => {
 			const input = e.inputBuffer.getChannelData(0);
+			let sum = 0;
+			for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+			this.onAudioLevel(Math.sqrt(sum / input.length));
+			if (!this.active || this.suspended) return;
 			if (this.transcribe.isRunning()) {
-				// Copy out of the live buffer before handing off.
 				this.transcribe.pushAudio(new Float32Array(input), this.audioCtx!.sampleRate);
 			}
 		};
-		this.sourceNode.connect(this.processor);
-		// ScriptProcessor must be connected to destination to fire on some engines.
-		this.processor.connect(this.audioCtx.destination);
-
-		this.startLevelLoop();
-		this.callbacks.onStart?.();
+		this.sourceNode.connect(processor);
+		const mute = this.audioCtx.createGain();
+		mute.gain.value = 0;
+		processor.connect(mute);
+		mute.connect(this.audioCtx.destination);
+		this.processor = processor;
 	}
 
 	private async restartStream(): Promise<void> {
@@ -229,6 +284,15 @@ export class SpeechInput {
 		if (this.levelRaf !== null) {
 			cancelAnimationFrame(this.levelRaf);
 			this.levelRaf = null;
+		}
+		if (this.workletNode) {
+			this.workletNode.port.onmessage = null;
+			try {
+				this.workletNode.disconnect();
+			} catch {
+				/* ignore */
+			}
+			this.workletNode = null;
 		}
 		if (this.processor) {
 			this.processor.onaudioprocess = null;
@@ -259,38 +323,28 @@ export class SpeechInput {
 		this.callbacks.onLevel?.(0);
 	}
 
-	private startLevelLoop(): void {
-		const analyser = this.analyser;
-		if (!analyser) return;
-		const data = new Uint8Array(analyser.fftSize);
-		const SPEECH_THRESHOLD = 0.06;
-		// Barge-in needs a louder, sustained signal to avoid tripping on the
-		// agent's own audio echoing back (echoCancellation also helps).
-		const BARGE_IN_THRESHOLD = 0.12;
-		const BARGE_IN_MS = 250; // sustained loud input to count as a barge-in
+	/**
+	 * Handle a loudness sample from the audio worklet. Drives the UI meter and
+	 * VAD endpointing while listening, and barge-in detection while suspended
+	 * (agent speaking). Runs off worklet messages, not requestAnimationFrame,
+	 * so it keeps working even if the main thread is busy.
+	 */
+	private onAudioLevel(rms: number): void {
+		const SPEECH_THRESHOLD = 0.015;
+		const BARGE_IN_THRESHOLD = 0.04;
+		const BARGE_IN_MS = 250;
 
-		const tick = () => {
-			if (!this.analyser) return;
-			this.analyser.getByteTimeDomainData(data);
-			let sum = 0;
-			for (let i = 0; i < data.length; i++) {
-				const v = (data[i] - 128) / 128;
-				sum += v * v;
+		if (!this.suspended) {
+			this.callbacks.onLevel?.(Math.min(1, rms * 4));
+			this.handleVad(rms > SPEECH_THRESHOLD);
+		} else {
+			if (this.bargeInLogCount++ % 15 === 0) {
+				console.log(
+					`[agent] barge-in watch rms=${rms.toFixed(4)} (threshold ${BARGE_IN_THRESHOLD})`
+				);
 			}
-			const rms = Math.sqrt(sum / data.length);
-			const level = Math.min(1, rms * 3);
-
-			if (!this.suspended) {
-				this.callbacks.onLevel?.(level);
-				this.handleVad(rms > SPEECH_THRESHOLD);
-			} else {
-				// Agent is speaking: watch for the user interrupting.
-				this.detectBargeIn(rms > BARGE_IN_THRESHOLD, BARGE_IN_MS);
-			}
-
-			this.levelRaf = requestAnimationFrame(tick);
-		};
-		this.levelRaf = requestAnimationFrame(tick);
+			this.detectBargeIn(rms > BARGE_IN_THRESHOLD, BARGE_IN_MS);
+		}
 	}
 
 	/** Accumulate loud time while suspended; fire onBargeIn once past the threshold. */
@@ -304,6 +358,7 @@ export class SpeechInput {
 			if (this.bargeInLoudMs >= neededMs) {
 				this.bargeInFired = true;
 				this.bargeInLoudMs = 0;
+				console.log("[agent] BARGE-IN fired — interrupting playback");
 				this.callbacks.onBargeIn?.();
 			}
 		} else {

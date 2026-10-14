@@ -119,7 +119,9 @@ export class TranscribeStream {
 			  });
 
 		try {
+			console.log("[agent] Transcribe: sending StartStreamTranscription, autoDetect=", autoDetect);
 			const response = await this.getClient().send(command);
+			console.log("[agent] Transcribe: stream opened");
 			if (!response.TranscriptResultStream) {
 				throw new Error("No transcript stream returned.");
 			}
@@ -130,6 +132,9 @@ export class TranscribeStream {
 					const alt = result.Alternatives?.[0];
 					const text = alt?.Transcript?.trim();
 					if (!text) continue;
+					console.log(
+						`[agent] Transcribe result partial=${result.IsPartial} lang=${result.LanguageCode}: ${text}`
+					);
 					// Report detected language (present when IdentifyLanguage is on).
 					const detected = toAgentLanguage(result.LanguageCode);
 					if (detected) callbacks.onLanguage?.(detected);
@@ -140,7 +145,9 @@ export class TranscribeStream {
 					}
 				}
 			}
+			console.log("[agent] Transcribe: stream ended");
 		} catch (err) {
+			console.error("[agent] Transcribe error:", err);
 			if (this.running) {
 				callbacks.onError?.((err as Error).message);
 			}

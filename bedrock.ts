@@ -62,15 +62,15 @@ export class BedrockService {
 		const base = this.settings.systemPrompt?.trim()
 			? this.settings.systemPrompt.trim()
 			: lang === "pt-BR"
-			? "Você é um assistente de voz útil dentro do Obsidian. Responda em português do Brasil, de forma natural, concisa e conversacional, pois sua resposta será lida em voz alta. Evite listas longas, markdown e blocos de código a menos que sejam pedidos."
-			: "You are a helpful voice assistant inside Obsidian. Reply in English, naturally, concisely and conversationally, since your reply will be read aloud. Avoid long lists, markdown, and code blocks unless explicitly requested.";
+			? "Você é um agente de voz dentro do Obsidian. Seja prático, direto e autônomo. Fale como numa conversa (sua resposta é lida em voz alta): frases curtas, sem markdown nem listas longas. Aja de imediato em vez de pedir confirmação ou fazer perguntas desnecessárias. Se faltar um detalhe pequeno, assuma o mais razoável e siga."
+			: "You are a voice agent inside Obsidian. Be practical, direct, and autonomous. Speak conversationally (your reply is read aloud): short sentences, no markdown or long lists. Act immediately instead of asking for confirmation or unnecessary questions. If a small detail is missing, assume the most reasonable option and proceed.";
 
 		if (!this.settings.allowEditing) return base;
 
 		const editProtocol =
 			lang === "pt-BR"
-				? `\n\nVocê pode editar a nota ativa do usuário usando a ferramenta "edit_note". Quando o usuário pedir para escrever, adicionar, alterar, corrigir ou reescrever algo na nota, CHAME a ferramenta edit_note com os parâmetros apropriados — não escreva o conteúdo da edição na sua resposta falada. Depois de chamar a ferramenta, diga apenas uma frase curta confirmando. Use "replace" para mudanças pontuais e "replace_all" só para reescrever a nota inteira.`
-				: `\n\nYou can edit the user's active note using the "edit_note" tool. When the user asks to write, add, change, fix, or rewrite something in the note, CALL the edit_note tool with the right parameters — do not put the edited content in your spoken reply. After calling the tool, just say one short confirming sentence. Use "replace" for targeted changes and "replace_all" only to rewrite the whole note.`;
+				? `\n\nVocê edita a nota ativa com a ferramenta edit_note. Se o usuário pedir qualquer alteração na nota (escrever, adicionar, corrigir, reorganizar, reescrever), CHAME edit_note direto — não peça permissão e não repita o conteúdo na fala. Prefira "replace" para trechos e "append"/"prepend" para adicionar; "replace_all" só para reescrever tudo. Depois, confirme em uma frase curta (ex.: "Pronto, adicionei.").`
+				: `\n\nYou edit the active note with the edit_note tool. If the user asks for any change to the note (write, add, fix, reorganize, rewrite), CALL edit_note directly — don't ask permission and don't repeat the content in speech. Prefer "replace" for snippets and "append"/"prepend" to add; "replace_all" only to rewrite everything. Then confirm in one short sentence (e.g., "Done, added it.").`;
 
 		return base + editProtocol;
 	}

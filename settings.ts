@@ -43,12 +43,12 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	useBedrock: true,
 	bedrockModelId: "us.anthropic.claude-sonnet-4-6",
 	systemPrompt: "",
-	maxTokens: 512,
-	temperature: 0.7,
+	maxTokens: 400,
+	temperature: 0.6,
 	includeActiveNote: true,
 	maxNoteChars: 6000,
-	allowEditing: false,
-	confirmEdits: true,
+	allowEditing: true,
+	confirmEdits: false,
 	autoDetectLanguage: true,
 };
 

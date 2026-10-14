@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting, WorkspaceLeaf } from "obsidian";
 import { Agent } from "./agent";
 import { PollyService } from "./polly";
 import {
@@ -51,6 +51,27 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 				const next: AgentLanguage =
 					this.settings.language === "pt-BR" ? "en-US" : "pt-BR";
 				this.setLanguage(next);
+			},
+		});
+
+		this.addCommand({
+			id: "test-edit-active-note",
+			name: "Test: write a line to the active note",
+			callback: async () => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") {
+					new Notice("Open a markdown note first.");
+					return;
+				}
+				try {
+					const current = await this.app.vault.read(file);
+					const stamp = new Date().toLocaleTimeString();
+					await this.app.vault.modify(file, current + `\n> [agent test] ${stamp}`);
+					new Notice("Test edit written to the note.");
+				} catch (e) {
+					new Notice("Test edit FAILED: " + (e as Error).message);
+					console.error("[agent] test edit failed", e);
+				}
 			},
 		});
 
