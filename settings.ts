@@ -14,6 +14,11 @@ export interface AgentSettings {
 	talkMode: boolean;
 	inputDeviceId: string;
 	silenceMs: number;
+	useBedrock: boolean;
+	bedrockModelId: string;
+	systemPrompt: string;
+	maxTokens: number;
+	temperature: number;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -30,7 +35,18 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	talkMode: false,
 	inputDeviceId: "",
 	silenceMs: 1500,
+	useBedrock: true,
+	bedrockModelId: "us.anthropic.claude-sonnet-4-6",
+	systemPrompt: "",
+	maxTokens: 512,
+	temperature: 0.7,
 };
+
+// Bedrock models verified available in the account (Converse-compatible).
+export const BEDROCK_MODELS: { id: string; label: string }[] = [
+	{ id: "us.anthropic.claude-sonnet-4-6", label: "Claude Sonnet 4.6 (recommended)" },
+	{ id: "us.anthropic.claude-haiku-4-5-20251001-v1:0", label: "Claude Haiku 4.5 (fast)" },
+];
 
 // Common Polly voices per locale. These are the neural-capable voices
 // most relevant to the two supported languages.

@@ -4,6 +4,7 @@ import { PollyService } from "./polly";
 import {
 	AgentLanguage,
 	AgentSettings,
+	BEDROCK_MODELS,
 	DEFAULT_SETTINGS,
 	LANGUAGE_LABELS,
 	VOICES,
@@ -18,7 +19,7 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		this.agent = new Agent(this.settings.language);
+		this.agent = new Agent(this.settings);
 		this.polly = new PollyService(this.settings);
 
 		this.registerView(
@@ -204,6 +205,72 @@ class AgentSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		containerEl.createEl("h3", { text: "Intelligence (Amazon Bedrock)" });
+
+		new Setting(containerEl)
+			.setName("Use Bedrock")
+			.setDesc("Power the agent's replies with an Amazon Bedrock model. Off = simple built-in replies.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.useBedrock).onChange(async (v) => {
+					this.plugin.settings.useBedrock = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Model")
+			.setDesc("Bedrock model used to generate replies.")
+			.addDropdown((dd) => {
+				BEDROCK_MODELS.forEach((m) => dd.addOption(m.id, m.label));
+				// Allow a custom id already set that isn't in the list.
+				if (!BEDROCK_MODELS.some((m) => m.id === this.plugin.settings.bedrockModelId)) {
+					dd.addOption(this.plugin.settings.bedrockModelId, this.plugin.settings.bedrockModelId);
+				}
+				dd.setValue(this.plugin.settings.bedrockModelId).onChange(async (v) => {
+					this.plugin.settings.bedrockModelId = v;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("System prompt (optional)")
+			.setDesc("Override the default persona. Leave blank to use the built-in voice-friendly prompt.")
+			.addTextArea((ta) => {
+				ta.setValue(this.plugin.settings.systemPrompt).onChange(async (v) => {
+					this.plugin.settings.systemPrompt = v;
+					await this.plugin.saveSettings();
+				});
+				ta.inputEl.rows = 3;
+			});
+
+		new Setting(containerEl)
+			.setName("Temperature")
+			.setDesc("Higher = more creative, lower = more focused.")
+			.addSlider((s) =>
+				s
+					.setLimits(0, 1, 0.1)
+					.setValue(this.plugin.settings.temperature)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.temperature = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Max tokens")
+			.setDesc("Maximum length of each reply.")
+			.addSlider((s) =>
+				s
+					.setLimits(128, 2048, 64)
+					.setValue(this.plugin.settings.maxTokens)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.maxTokens = v;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		containerEl.createEl("h3", { text: "AWS credentials" });
 

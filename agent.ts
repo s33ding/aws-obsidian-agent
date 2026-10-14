@@ -1,4 +1,5 @@
-import { AgentLanguage } from "./settings";
+import { BedrockService, ChatTurn } from "./bedrock";
+import { AgentLanguage, AgentSettings } from "./settings";
 
 export interface AgentReply {
 	text: string;
@@ -6,19 +7,35 @@ export interface AgentReply {
 }
 
 /**
- * A simple, localized rule-based agent. It responds in the active language
- * and exposes a single `respond` seam so a real LLM backend can be dropped
- * in later without touching the UI or TTS layers.
+ * Conversational agent. When Bedrock is enabled it sends the conversation to
+ * the configured model via the Converse API and keeps a rolling history. If
+ * Bedrock is disabled or errors out, it falls back to localized rule-based
+ * replies so the plugin still responds and speaks.
  */
 export class Agent {
-	constructor(private lang: AgentLanguage) {}
+	private history: ChatTurn[] = [];
+	private bedrock: BedrockService;
 
-	setLanguage(lang: AgentLanguage): void {
-		this.lang = lang;
+	constructor(private settings: AgentSettings) {
+		this.bedrock = new BedrockService(settings);
+	}
+
+	private get lang(): AgentLanguage {
+		return this.settings.language;
+	}
+
+	setLanguage(_lang: AgentLanguage): void {
+		// Language is read from settings; switching context starts a fresh turn
+		// stream but we keep history so the conversation continues.
 	}
 
 	getLanguage(): AgentLanguage {
 		return this.lang;
+	}
+
+	/** Clear the conversation history. */
+	reset(): void {
+		this.history = [];
 	}
 
 	greeting(): AgentReply {
@@ -29,55 +46,62 @@ export class Agent {
 		return { text, lang: this.lang };
 	}
 
-	/**
-	 * Produce a reply to the user's message in the active language.
-	 * Replace the body of this method with an LLM call to upgrade the agent.
-	 */
 	async respond(message: string): Promise<AgentReply> {
-		const text = this.ruleBasedReply(message.trim());
-		return { text, lang: this.lang };
+		const msg = message.trim();
+		if (!msg) {
+			return {
+				text: this.lang === "pt-BR" ? "Diga alguma coisa." : "Say something.",
+				lang: this.lang,
+			};
+		}
+
+		if (this.settings.useBedrock) {
+			try {
+				const reply = await this.bedrock.converse(msg, this.history, this.lang);
+				this.history.push({ role: "user", text: msg });
+				this.history.push({ role: "assistant", text: reply });
+				this.trimHistory();
+				return { text: reply, lang: this.lang };
+			} catch (err) {
+				console.error("Bedrock error, falling back to rules:", err);
+				const prefix =
+					this.lang === "pt-BR"
+						? "(Bedrock indisponível) "
+						: "(Bedrock unavailable) ";
+				return { text: prefix + this.ruleBasedReply(msg), lang: this.lang };
+			}
+		}
+
+		return { text: this.ruleBasedReply(msg), lang: this.lang };
+	}
+
+	/** Keep the last N turns to bound token usage. */
+	private trimHistory(): void {
+		const MAX_TURNS = 20; // 10 exchanges
+		if (this.history.length > MAX_TURNS) {
+			this.history = this.history.slice(this.history.length - MAX_TURNS);
+		}
 	}
 
 	private ruleBasedReply(msg: string): string {
 		const lower = msg.toLowerCase();
 		const pt = this.lang === "pt-BR";
 
-		if (!msg) {
-			return pt ? "Diga alguma coisa e eu respondo." : "Say something and I'll respond.";
-		}
-
 		if (/\b(oi|ol[aá]|hello|hi|hey)\b/.test(lower)) {
 			return pt ? "Olá! Como posso ajudar você hoje?" : "Hello! How can I help you today?";
 		}
-
 		if (/\b(obrigad|thanks|thank you)\b/.test(lower)) {
 			return pt ? "De nada! Precisa de mais alguma coisa?" : "You're welcome! Anything else?";
 		}
-
 		if (/\b(tchau|bye|goodbye|adeus)\b/.test(lower)) {
-			return pt ? "Até logo! Foi bom conversar com você." : "Goodbye! It was nice talking with you.";
+			return pt ? "Até logo!" : "Goodbye!";
 		}
-
 		if (/\b(hora|horas|time)\b/.test(lower)) {
 			const now = new Date().toLocaleTimeString(pt ? "pt-BR" : "en-US");
 			return pt ? `Agora são ${now}.` : `It's currently ${now}.`;
 		}
-
-		if (/\b(nome|name|quem [eé] voc[eê]|who are you)\b/.test(lower)) {
-			return pt
-				? "Eu sou o agente do AWS Obsidian Agent, com voz pela Amazon Polly."
-				: "I'm the AWS Obsidian Agent, speaking through Amazon Polly.";
-		}
-
-		if (/\?$/.test(msg)) {
-			return pt
-				? `Boa pergunta sobre "${msg}". Ainda sou um agente simples, mas posso falar em voz alta.`
-				: `Good question about "${msg}". I'm a simple agent for now, but I can speak out loud.`;
-		}
-
-		// Default: acknowledge and echo meaningfully.
 		return pt
-			? `Você disse: "${msg}". Entendi! Em breve terei respostas mais inteligentes.`
-			: `You said: "${msg}". Got it! Smarter answers are coming soon.`;
+			? `Você disse: "${msg}".`
+			: `You said: "${msg}".`;
 	}
 }

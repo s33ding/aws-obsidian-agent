@@ -27,6 +27,7 @@
 		"typescript": "5.4.3"
 	},
 	"dependencies": {
+		"@aws-sdk/client-bedrock-runtime": "^3.1151.0",
 		"@aws-sdk/client-polly": "3.556.0",
 		"@aws-sdk/client-transcribe-streaming": "^3.556.0"
 	}
