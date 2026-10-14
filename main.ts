@@ -52,6 +52,18 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 			callback: () => this.polly.stop(),
 		});
 
+		this.addCommand({
+			id: "toggle-talk-mode",
+			name: "Toggle talk mode (hands-free voice)",
+			callback: () => {
+				void this.activateView().then(() => {
+					const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_AGENT);
+					const view = leaves[0]?.view;
+					if (view instanceof AgentView) view.toggleTalkPublic();
+				});
+			},
+		});
+
 		this.addSettingTab(new AgentSettingTab(this.app, this));
 	}
 
@@ -124,6 +136,16 @@ class AgentSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.speakResponses).onChange(async (v) => {
 					this.plugin.settings.speakResponses = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Talk mode on open")
+			.setDesc("Start hands-free voice listening automatically when the agent opens.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.talkMode).onChange(async (v) => {
+					this.plugin.settings.talkMode = v;
 					await this.plugin.saveSettings();
 				})
 			);
