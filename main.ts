@@ -217,8 +217,12 @@ class AgentSettingTab extends PluginSettingTab {
 		containerEl.createEl("h2", { text: "AWS Obsidian Agent" });
 
 		new Setting(containerEl)
-			.setName("Language")
-			.setDesc("Active language for the agent and Polly voice (used as the default/preferred when auto-detect is on).")
+			.setName("Language (default)")
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName("Default language")
+			.setDesc("The language the agent uses. Change it anytime here or with the dropdown in the agent panel.")
 			.addDropdown((dd) => {
 				(Object.keys(LANGUAGE_LABELS) as AgentLanguage[]).forEach((lang) => {
 					dd.addOption(lang, LANGUAGE_LABELS[lang]);
@@ -230,7 +234,7 @@ class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Auto-detect spoken language")
-			.setDesc("Automatically switch between pt-BR and en-US based on what you say (hands-free voice).")
+			.setDesc("Optional. Switch pt-BR/en-US automatically from your speech. Off by default — detection can be unstable, so manual switching is recommended.")
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.autoDetectLanguage).onChange(async (v) => {
 					this.plugin.settings.autoDetectLanguage = v;
