@@ -212,6 +212,7 @@ export class AgentView extends ItemView {
 				onEnd: () => this.setListeningUI(false),
 				onError: (err) => this.onSpeechError(err),
 			},
+			this.settings,
 			{
 				deviceId: this.settings.inputDeviceId || undefined,
 				silenceMs: this.settings.silenceMs,
@@ -219,8 +220,7 @@ export class AgentView extends ItemView {
 		);
 
 		if (!isSpeechRecognitionSupported()) {
-			// Metering/VAD can still work; warn that transcription may be off.
-			new Notice("Speech recognition engine not found; voice capture may be limited.");
+			new Notice("Microphone not available in this environment.");
 		}
 
 		this.talkOn = true;

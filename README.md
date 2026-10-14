@@ -6,6 +6,7 @@ An Obsidian plugin that gives you a conversational agent you can **talk with**, 
 
 - Chat panel in the right sidebar (ribbon icon or command palette).
 - Text-to-speech replies via Amazon Polly (neural or standard engine).
+- Hands-free **talk mode**: speak and the agent listens, transcribes via Amazon Transcribe streaming, and replies out loud — no button mashing. Includes a live mic level meter and input-device selector.
 - One-click / one-command language switch between `pt-BR` and `en-US`, which also swaps the Polly voice.
 - Per-language voice selection.
 - Credentials from your ambient AWS profile/environment, or entered manually.
@@ -49,13 +50,15 @@ Then enable **AWS Obsidian Agent** in Settings → Community plugins.
 
 ## AWS setup
 
-The plugin needs `polly:SynthesizeSpeech`. Minimal IAM policy:
+The plugin needs `polly:SynthesizeSpeech` (text-to-speech) and
+`transcribe:StartStreamTranscription` (hands-free voice input). Minimal IAM policy:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "polly:SynthesizeSpeech", "Resource": "*" }
+    { "Effect": "Allow", "Action": ["polly:SynthesizeSpeech", "polly:DescribeVoices"], "Resource": "*" },
+    { "Effect": "Allow", "Action": "transcribe:StartStreamTranscription", "Resource": "*" }
   ]
 }
 ```

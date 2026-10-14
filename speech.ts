@@ -1,60 +1,5 @@
-import { AgentLanguage } from "./settings";
-
-// The Web Speech API is not in the default TS DOM lib in all setups, so we
-// declare the minimal surface we use.
-interface SpeechRecognitionAlternativeLike {
-	transcript: string;
-}
-interface SpeechRecognitionResultLike {
-	readonly isFinal: boolean;
-	readonly length: number;
-	item(index: number): SpeechRecognitionAlternativeLike;
-	[index: number]: SpeechRecognitionAlternativeLike;
-}
-interface SpeechRecognitionResultListLike {
-	readonly length: number;
-	item(index: number): SpeechRecognitionResultLike;
-	[index: number]: SpeechRecognitionResultLike;
-}
-interface SpeechRecognitionEventLike extends Event {
-	readonly resultIndex: number;
-	readonly results: SpeechRecognitionResultListLike;
-}
-interface SpeechRecognitionErrorEventLike extends Event {
-	readonly error: string;
-	readonly message: string;
-}
-interface SpeechRecognitionLike extends EventTarget {
-	lang: string;
-	continuous: boolean;
-	interimResults: boolean;
-	maxAlternatives: number;
-	start(): void;
-	stop(): void;
-	abort(): void;
-	onresult: ((e: SpeechRecognitionEventLike) => void) | null;
-	onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
-	onend: (() => void) | null;
-	onstart: (() => void) | null;
-}
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function getRecognitionCtor(): SpeechRecognitionCtor | null {
-	const w = window as unknown as {
-		SpeechRecognition?: SpeechRecognitionCtor;
-		webkitSpeechRecognition?: SpeechRecognitionCtor;
-	};
-	return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
-
-export function isSpeechRecognitionSupported(): boolean {
-	return getRecognitionCtor() !== null;
-}
-
-const LOCALE: Record<AgentLanguage, string> = {
-	"pt-BR": "pt-BR",
-	"en-US": "en-US",
-};
+import { AgentLanguage, AgentSettings } from "./settings";
+import { TranscribeStream } from "./transcribe";
 
 export interface AudioInputDevice {
 	deviceId: string;
@@ -73,10 +18,19 @@ export async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
 		}));
 }
 
+/**
+ * Transcription is handled by Amazon Transcribe (see transcribe.ts), so the
+ * Web Speech API is no longer required. This stays true as long as the mic
+ * stream can be opened.
+ */
+export function isSpeechRecognitionSupported(): boolean {
+	return !!navigator.mediaDevices?.getUserMedia;
+}
+
 export interface SpeechCallbacks {
-	/** Fired with the stabilized final transcript when a turn ends (silence). */
+	/** Fired with the final transcript when a turn ends (silence). */
 	onFinal: (text: string) => void;
-	/** Fired continuously with the current interim (not yet final) text. */
+	/** Fired continuously with the current partial transcript. */
 	onInterim?: (text: string) => void;
 	/** Microphone is open and listening. */
 	onStart?: () => void;
@@ -89,14 +43,13 @@ export interface SpeechCallbacks {
 }
 
 /**
- * Hands-free voice input.
+ * Hands-free voice input using a persistent microphone stream plus Amazon
+ * Transcribe streaming for recognition.
  *
- * Keeps a single persistent microphone stream (getUserMedia) open while talk
- * mode is on — this avoids the rapid open/close cycling that made the KDE mic
- * indicator flicker. A Web Audio AnalyserNode drives both the level animation
- * and silence-based endpointing (knowing when the user stopped talking). The
- * Web Speech API runs on top for transcription and is only re-armed when the
- * mic stream is still alive, never in a tight loop.
+ * - One getUserMedia stream stays open while talk mode is on (no KDE flicker).
+ * - A Web Audio AnalyserNode drives the level animation.
+ * - A ScriptProcessor taps raw PCM frames and feeds them to Transcribe.
+ * - Silence-based endpointing flushes the accumulated transcript as one turn.
  */
 export class SpeechInput {
 	private lang: AgentLanguage;
@@ -104,97 +57,92 @@ export class SpeechInput {
 	private deviceId: string | undefined;
 	private silenceMs: number;
 
-	// Mic / audio graph.
 	private stream: MediaStream | null = null;
 	private audioCtx: AudioContext | null = null;
 	private analyser: AnalyserNode | null = null;
+	private processor: ScriptProcessorNode | null = null;
+	private sourceNode: MediaStreamAudioSourceNode | null = null;
 	private levelRaf: number | null = null;
 
-	// Recognition.
-	private recognition: SpeechRecognitionLike | null = null;
+	private transcribe: TranscribeStream;
 
-	// State.
-	private active = false; // talk mode on
-	private suspended = false; // paused during TTS
-	private running = false; // recognition engine running
+	private active = false;
+	private suspended = false;
 
 	// Turn buffering + endpointing.
 	private finalBuffer = "";
-	private interimBuffer = "";
+	private partialBuffer = "";
 	private silenceTimer: number | null = null;
-	private speaking = false; // currently above the speech threshold
+	private speaking = false;
 
 	constructor(
 		lang: AgentLanguage,
 		callbacks: SpeechCallbacks,
+		settings: AgentSettings,
 		opts: { deviceId?: string; silenceMs?: number } = {}
 	) {
 		this.lang = lang;
 		this.callbacks = callbacks;
 		this.deviceId = opts.deviceId;
 		this.silenceMs = opts.silenceMs ?? 1500;
+		this.transcribe = new TranscribeStream(settings);
 	}
 
 	setLanguage(lang: AgentLanguage): void {
+		if (this.lang === lang) return;
 		this.lang = lang;
-		if (this.recognition) this.recognition.lang = LOCALE[lang];
+		// Restart the transcription session in the new language.
+		if (this.active && !this.suspended) {
+			this.restartTranscription();
+		}
 	}
 
 	setDevice(deviceId: string | undefined): void {
 		if (this.deviceId === deviceId) return;
 		this.deviceId = deviceId;
-		// Reopen the stream on the new device if we're currently active.
-		if (this.active) {
-			void this.restartStream();
-		}
+		if (this.active) void this.restartStream();
 	}
 
 	isActive(): boolean {
 		return this.active;
 	}
 
-	/** Turn talk mode on: open the mic once and keep it open. */
 	async start(): Promise<void> {
 		if (this.active) return;
 		this.active = true;
 		this.suspended = false;
 		await this.openStream();
-		this.startRecognition();
+		this.startTranscription();
 	}
 
-	/** Turn talk mode off: tear everything down (mic indicator goes away). */
 	stop(): void {
 		this.active = false;
 		this.suspended = false;
 		this.clearSilenceTimer();
-		this.stopRecognition();
+		this.transcribe.stop();
 		this.closeStream();
 		this.finalBuffer = "";
-		this.interimBuffer = "";
+		this.partialBuffer = "";
 		this.callbacks.onEnd?.();
 	}
 
-	/** Pause recognition during TTS WITHOUT closing the mic stream. */
 	suspend(): void {
 		if (!this.active || this.suspended) return;
 		this.suspended = true;
 		this.clearSilenceTimer();
-		this.stopRecognition();
-		// Keep the stream + analyser open so the device indicator stays stable;
-		// just mute the level animation.
+		this.transcribe.stop();
 		this.callbacks.onLevel?.(0);
 	}
 
-	/** Resume recognition after suspend(). */
 	resume(): void {
 		if (!this.active || !this.suspended) return;
 		this.suspended = false;
 		this.finalBuffer = "";
-		this.interimBuffer = "";
-		this.startRecognition();
+		this.partialBuffer = "";
+		this.startTranscription();
 	}
 
-	// ---- Microphone stream + metering -------------------------------------
+	// ---- Mic stream + metering + PCM tap ----------------------------------
 
 	private async openStream(): Promise<void> {
 		if (!navigator.mediaDevices?.getUserMedia) {
@@ -205,7 +153,11 @@ export class SpeechInput {
 		try {
 			const constraints: MediaStreamConstraints = {
 				audio: this.deviceId
-					? { deviceId: { exact: this.deviceId }, echoCancellation: true, noiseSuppression: true }
+					? {
+							deviceId: { exact: this.deviceId },
+							echoCancellation: true,
+							noiseSuppression: true,
+					  }
 					: { echoCancellation: true, noiseSuppression: true },
 			};
 			this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -219,31 +171,64 @@ export class SpeechInput {
 			return;
 		}
 
-		// Build the analyser graph for level metering + silence detection.
-		const Ctx = (window.AudioContext ||
-			(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+		const Ctx =
+			window.AudioContext ||
+			(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 		this.audioCtx = new Ctx();
-		const source = this.audioCtx.createMediaStreamSource(this.stream);
-		const analyser = this.audioCtx.createAnalyser();
-		analyser.fftSize = 512;
-		analyser.smoothingTimeConstant = 0.6;
-		source.connect(analyser);
-		this.analyser = analyser;
+		this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
+
+		// Analyser for the level meter.
+		this.analyser = this.audioCtx.createAnalyser();
+		this.analyser.fftSize = 512;
+		this.analyser.smoothingTimeConstant = 0.6;
+		this.sourceNode.connect(this.analyser);
+
+		// ScriptProcessor to tap raw PCM frames for Transcribe.
+		this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
+		this.processor.onaudioprocess = (e: AudioProcessingEvent) => {
+			if (!this.active || this.suspended) return;
+			const input = e.inputBuffer.getChannelData(0);
+			if (this.transcribe.isRunning()) {
+				// Copy out of the live buffer before handing off.
+				this.transcribe.pushAudio(new Float32Array(input), this.audioCtx!.sampleRate);
+			}
+		};
+		this.sourceNode.connect(this.processor);
+		// ScriptProcessor must be connected to destination to fire on some engines.
+		this.processor.connect(this.audioCtx.destination);
+
 		this.startLevelLoop();
 		this.callbacks.onStart?.();
 	}
 
 	private async restartStream(): Promise<void> {
-		this.stopRecognition();
+		this.transcribe.stop();
 		this.closeStream();
 		await this.openStream();
-		if (this.active && !this.suspended) this.startRecognition();
+		if (this.active && !this.suspended) this.startTranscription();
 	}
 
 	private closeStream(): void {
 		if (this.levelRaf !== null) {
 			cancelAnimationFrame(this.levelRaf);
 			this.levelRaf = null;
+		}
+		if (this.processor) {
+			this.processor.onaudioprocess = null;
+			try {
+				this.processor.disconnect();
+			} catch {
+				/* ignore */
+			}
+			this.processor = null;
+		}
+		if (this.sourceNode) {
+			try {
+				this.sourceNode.disconnect();
+			} catch {
+				/* ignore */
+			}
+			this.sourceNode = null;
 		}
 		this.analyser = null;
 		if (this.audioCtx) {
@@ -261,37 +246,34 @@ export class SpeechInput {
 		const analyser = this.analyser;
 		if (!analyser) return;
 		const data = new Uint8Array(analyser.fftSize);
-		const SPEECH_THRESHOLD = 0.06; // RMS above this counts as speech
+		const SPEECH_THRESHOLD = 0.06;
 
 		const tick = () => {
 			if (!this.analyser) return;
 			this.analyser.getByteTimeDomainData(data);
-			// Compute RMS of the waveform centered at 128.
 			let sum = 0;
 			for (let i = 0; i < data.length; i++) {
 				const v = (data[i] - 128) / 128;
 				sum += v * v;
 			}
 			const rms = Math.sqrt(sum / data.length);
-			const level = Math.min(1, rms * 3); // scale for display
-
+			const level = Math.min(1, rms * 3);
 			if (!this.suspended) {
 				this.callbacks.onLevel?.(level);
 				this.handleVad(rms > SPEECH_THRESHOLD);
 			}
-
 			this.levelRaf = requestAnimationFrame(tick);
 		};
 		this.levelRaf = requestAnimationFrame(tick);
 	}
 
-	/** Voice-activity-based endpointing: fire a turn after a pause. */
+	// ---- Endpointing -------------------------------------------------------
+
 	private handleVad(isSpeech: boolean): void {
 		if (isSpeech) {
 			this.speaking = true;
 			this.clearSilenceTimer();
 		} else if (this.speaking && this.silenceTimer === null) {
-			// We were speaking and just went quiet: start the end-of-turn timer.
 			this.silenceTimer = window.setTimeout(() => {
 				this.silenceTimer = null;
 				this.flushTurn();
@@ -306,90 +288,35 @@ export class SpeechInput {
 		}
 	}
 
-	/** End the current turn: emit the best transcript we have. */
 	private flushTurn(): void {
 		this.speaking = false;
-		const text = (this.finalBuffer || this.interimBuffer).trim();
+		const text = (this.finalBuffer || this.partialBuffer).trim();
 		this.finalBuffer = "";
-		this.interimBuffer = "";
+		this.partialBuffer = "";
 		if (text) this.callbacks.onFinal(text);
 	}
 
-	// ---- Speech recognition (transcription) -------------------------------
+	// ---- Transcription -----------------------------------------------------
 
-	private startRecognition(): void {
-		if (!this.active || this.suspended || this.running) return;
-		const Ctor = getRecognitionCtor();
-		if (!Ctor) {
-			// No transcription available, but metering/VAD still works.
-			this.callbacks.onError?.("Speech recognition not supported; transcription disabled.");
-			return;
-		}
-
-		const rec = new Ctor();
-		rec.lang = LOCALE[this.lang];
-		rec.continuous = true;
-		rec.interimResults = true;
-		rec.maxAlternatives = 1;
-
-		rec.onstart = () => {
-			this.running = true;
-		};
-
-		rec.onresult = (e: SpeechRecognitionEventLike) => {
-			let interim = "";
-			for (let i = e.resultIndex; i < e.results.length; i++) {
-				const result = e.results[i];
-				const transcript = result[0]?.transcript ?? "";
-				if (result.isFinal) {
-					this.finalBuffer = (this.finalBuffer + " " + transcript).trim();
-				} else {
-					interim += transcript;
-				}
-			}
-			this.interimBuffer = interim.trim();
-			if (this.interimBuffer) this.callbacks.onInterim?.(this.interimBuffer);
-		};
-
-		rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
-			if (e.error !== "no-speech" && e.error !== "aborted") {
-				this.callbacks.onError?.(e.error || "speech recognition error");
-			}
-			if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-				this.active = false;
-			}
-		};
-
-		rec.onend = () => {
-			this.running = false;
-			// Only re-arm if the mic stream is still alive and we're actively
-			// listening. This avoids the open/close flicker: the mic stream
-			// itself never closed, we're just restarting the recognizer on top.
-			if (this.active && !this.suspended && this.stream) {
-				window.setTimeout(() => this.startRecognition(), 300);
-			}
-		};
-
-		this.recognition = rec;
-		try {
-			rec.start();
-		} catch {
-			this.running = false;
-		}
+	private startTranscription(): void {
+		if (!this.active || this.suspended || this.transcribe.isRunning()) return;
+		void this.transcribe.start(this.lang, {
+			onPartial: (text) => {
+				this.partialBuffer = text;
+				this.callbacks.onInterim?.(text);
+			},
+			onFinal: (text) => {
+				this.finalBuffer = (this.finalBuffer + " " + text).trim();
+			},
+			onError: (msg) => {
+				this.callbacks.onError?.(msg);
+			},
+		});
 	}
 
-	private stopRecognition(): void {
-		this.running = false;
-		if (this.recognition) {
-			this.recognition.onend = null;
-			this.recognition.onresult = null;
-			this.recognition.onerror = null;
-			try {
-				this.recognition.abort();
-			} catch {
-				/* ignore */
-			}
-			this.recognition = null;
-		}
+	private restartTranscription(): void {
+		this.transcribe.stop();
+		// Give the stream a tick to unwind before restarting.
+		window.setTimeout(() => this.startTranscription(), 200);
 	}
 }
