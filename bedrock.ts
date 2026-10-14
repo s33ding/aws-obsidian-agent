@@ -74,6 +74,8 @@ export class BedrockService {
 - edit_note: alterar a nota ativa (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
 - create_note: criar uma nota nova (name, content opcional) e abri-la.
 - open_note: abrir/trocar para outra nota existente.
+- rename_note: renomear uma nota (name, newName).
+- delete_note: excluir uma nota (vai para a lixeira; só quando o usuário pedir claramente).
 - set_view_mode: trocar a aba entre edição ("source") e leitura ("preview").
 - add_link: melhorar o grafo adicionando um [[link]] da nota ativa para outra nota.
 Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (links formam o grafo). Depois confirme em uma frase curta.`
@@ -81,6 +83,8 @@ Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (link
 - edit_note: change the active note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
 - create_note: create a new note (name, optional content) and open it.
 - open_note: open/switch to another existing note.
+- rename_note: rename a note (name, newName).
+- delete_note: delete a note (moves to trash; only when the user clearly asks).
 - set_view_mode: switch the tab between editing ("source") and reading ("preview").
 - add_link: improve the graph by adding a [[link]] from the active note to another note.
 To improve the Obsidian graph, connect related notes with add_link (links form the graph). Then confirm in one short sentence.`;
@@ -275,7 +279,50 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				},
 			},
 		};
-		return { tools: [tool, setViewMode, addLink, createNoteTool, openNoteTool] };
+		const renameNoteTool: Tool = {
+			toolSpec: {
+				name: "rename_note",
+				description:
+					"Rename a note (backlinks update automatically). Use when the user asks to rename or retitle a file.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							name: { type: "string", description: "Current note name/path." },
+							newName: { type: "string", description: "New name (or path to also move it)." },
+						},
+						required: ["name", "newName"],
+					},
+				},
+			},
+		};
+		const deleteNoteTool: Tool = {
+			toolSpec: {
+				name: "delete_note",
+				description:
+					"Delete a note (moved to trash, recoverable). Use only when the user clearly asks to delete/remove a file.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							name: { type: "string", description: "Name or path of the note to delete." },
+						},
+						required: ["name"],
+					},
+				},
+			},
+		};
+		return {
+			tools: [
+				tool,
+				setViewMode,
+				addLink,
+				createNoteTool,
+				openNoteTool,
+				renameNoteTool,
+				deleteNoteTool,
+			],
+		};
 	}
 
 	/**
@@ -461,6 +508,12 @@ function toAgentAction(name: string | undefined, input: unknown): AgentAction | 
 				: null;
 		case "open_note":
 			return typeof o.name === "string" ? { kind: "open_note", name: o.name } : null;
+		case "rename_note":
+			return typeof o.name === "string" && typeof o.newName === "string"
+				? { kind: "rename_note", name: o.name, newName: o.newName }
+				: null;
+		case "delete_note":
+			return typeof o.name === "string" ? { kind: "delete_note", name: o.name } : null;
 		default:
 			return null;
 	}

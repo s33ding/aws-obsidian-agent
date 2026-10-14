@@ -12,7 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
-import { AgentAction, setViewMode, addLink, createNote, openNote } from "./actions";
+import { AgentAction, setViewMode, addLink, createNote, openNote, renameNote, deleteNote } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -480,6 +480,18 @@ export class AgentView extends ItemView {
 			} else if (action.kind === "open_note") {
 				const res = await openNote(this.app, action.name);
 				this.addMessage("system", res.message);
+			} else if (action.kind === "rename_note") {
+				const res = await renameNote(this.app, action.name, action.newName);
+				this.addMessage("system", res.message);
+			} else if (action.kind === "delete_note") {
+				// Deletion is destructive — always confirm, even in autonomous mode.
+				const confirmed = await this.confirmDelete(action.name, pt);
+				if (confirmed) {
+					const res = await deleteNote(this.app, action.name);
+					this.addMessage("system", res.message);
+				} else {
+					this.addMessage("system", pt ? "Exclusão cancelada." : "Deletion cancelled.");
+				}
 			}
 		}
 	}
@@ -514,6 +526,27 @@ export class AgentView extends ItemView {
 	}
 
 	/** Render an inline confirmation card with Apply / Reject buttons. */
+	/** Inline Yes/No confirmation for a destructive delete. */
+	private confirmDelete(name: string, pt: boolean): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			const card = this.messagesEl.createDiv({ cls: "aws-agent-edit-card" });
+			card.createDiv({
+				cls: "aws-agent-edit-title",
+				text: (pt ? "Excluir a nota " : "Delete note ") + `"${name}"?`,
+			});
+			const btns = card.createDiv({ cls: "aws-agent-edit-btns" });
+			const yes = btns.createEl("button", { text: pt ? "Excluir" : "Delete", cls: "mod-warning" });
+			const no = btns.createEl("button", { text: pt ? "Cancelar" : "Cancel" });
+			const done = (v: boolean) => {
+				card.remove();
+				resolve(v);
+			};
+			yes.addEventListener("click", () => done(true));
+			no.addEventListener("click", () => done(false));
+			this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+		});
+	}
+
 	private confirmAndApply(
 		file: import("obsidian").TFile,
 		edit: NoteEdit,

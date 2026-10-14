@@ -11,7 +11,9 @@ export type AgentAction =
 	| { kind: "set_view_mode"; mode: "source" | "preview" }
 	| { kind: "add_link"; target: string; alias?: string }
 	| { kind: "create_note"; name: string; content?: string; open?: boolean }
-	| { kind: "open_note"; name: string };
+	| { kind: "open_note"; name: string }
+	| { kind: "rename_note"; name: string; newName: string }
+	| { kind: "delete_note"; name: string };
 
 export interface ActionResult {
 	ok: boolean;
@@ -145,6 +147,47 @@ export async function openNote(app: App, name: string): Promise<ActionResult> {
 	if (!file) return { ok: false, message: `Note "${name}" not found.` };
 	await app.workspace.getLeaf(false).openFile(file);
 	return { ok: true, message: `Opened "${file.basename}".` };
+}
+
+/**
+ * Rename a note. The new name keeps the note in its current folder unless the
+ * new name includes an explicit folder path. Uses fileManager.renameFile so
+ * Obsidian updates backlinks automatically.
+ */
+export async function renameNote(
+	app: App,
+	name: string,
+	newName: string
+): Promise<ActionResult> {
+	const file = findNote(app, name);
+	if (!file) return { ok: false, message: `Note "${name}" not found.` };
+	const folder = file.parent && file.parent.path !== "/" ? file.parent.path : "";
+	const rel = toNotePath(newName);
+	const dest = hasExplicitFolder(newName) || !folder ? rel : `${folder}/${rel}`;
+	try {
+		await app.fileManager.renameFile(file, dest);
+		return { ok: true, message: `Renamed to "${dest.replace(/\.md$/, "")}".` };
+	} catch (e) {
+		return { ok: false, message: `Could not rename: ${(e as Error).message}` };
+	}
+}
+
+/**
+ * Delete a note (moves it to trash per the user's Obsidian settings, which is
+ * recoverable). Returns false if the note isn't found.
+ */
+export async function deleteNote(app: App, name: string): Promise<ActionResult> {
+	const file = findNote(app, name);
+	if (!file) return { ok: false, message: `Note "${name}" not found.` };
+	const label = file.basename;
+	try {
+		// trash() moves to the trash (recoverable). true = system trash,
+		// false = vault's .trash folder; use false for portability.
+		await app.vault.trash(file, false);
+		return { ok: true, message: `Deleted "${label}" (moved to trash).` };
+	} catch (e) {
+		return { ok: false, message: `Could not delete: ${(e as Error).message}` };
+	}
 }
 
 /** Summary of the vault's link graph for analysis / suggestions. */

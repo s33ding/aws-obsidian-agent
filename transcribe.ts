@@ -44,6 +44,8 @@ export class TranscribeStream {
 	private client: TranscribeStreamingClient | null = null;
 	private running = false;
 	private closed = false;
+	// Monotonic token; a stale stream loop must not clobber a newer session.
+	private sessionId = 0;
 
 	// Audio frame queue bridging the Web Audio callback and the async stream.
 	private queue: Uint8Array[] = [];
@@ -98,6 +100,7 @@ export class TranscribeStream {
 		this.running = true;
 		this.closed = false;
 		this.queue = [];
+		const mySession = ++this.sessionId;
 
 		const audioStream = this.audioGenerator();
 
@@ -126,7 +129,7 @@ export class TranscribeStream {
 				throw new Error("No transcript stream returned.");
 			}
 			for await (const event of response.TranscriptResultStream) {
-				if (!this.running) break;
+				if (!this.running || mySession !== this.sessionId) break;
 				const results = event.TranscriptEvent?.Transcript?.Results ?? [];
 				for (const result of results) {
 					const alt = result.Alternatives?.[0];
@@ -148,11 +151,15 @@ export class TranscribeStream {
 			console.log("[agent] Transcribe: stream ended");
 		} catch (err) {
 			console.error("[agent] Transcribe error:", err);
-			if (this.running) {
+			if (this.running && mySession === this.sessionId) {
 				callbacks.onError?.((err as Error).message);
 			}
 		} finally {
-			this.running = false;
+			// Only clear running if WE are still the active session. A stale
+			// loop ending late must not kill a freshly started session.
+			if (mySession === this.sessionId) {
+				this.running = false;
+			}
 		}
 	}
 
