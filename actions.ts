@@ -61,6 +61,31 @@ function toNotePath(name: string): string {
 	return p;
 }
 
+/** Does the given name already specify a folder (contains a slash)? */
+function hasExplicitFolder(name: string): boolean {
+	return name.replace(/^\[\[|\]\]$/g, "").trim().includes("/");
+}
+
+/** The folder of the currently active note, or "" (vault root). */
+function activeFolder(app: App): string {
+	const file = app.workspace.getActiveFile();
+	if (!file || !file.parent) return "";
+	// parent.path is "" for the vault root.
+	return file.parent.path === "/" ? "" : file.parent.path;
+}
+
+/**
+ * Resolve where a new note should live. If the user gave an explicit folder
+ * (a slash in the name), honor it. Otherwise place it alongside the note the
+ * user is working on (same folder = same topic). Falls back to vault root.
+ */
+function resolveCreatePath(app: App, name: string): string {
+	const rel = toNotePath(name);
+	if (hasExplicitFolder(name)) return rel;
+	const folder = activeFolder(app);
+	return folder ? `${folder}/${rel}` : rel;
+}
+
 /** Find an existing markdown note by name or path (case-insensitive). */
 function findNote(app: App, name: string): TFile | null {
 	const path = toNotePath(name);
@@ -89,16 +114,26 @@ export async function createNote(
 	content = "",
 	open = true
 ): Promise<ActionResult> {
-	const path = toNotePath(name);
+	// Reuse an existing note with that name rather than duplicating it.
 	const existing = findNote(app, name);
 	if (existing) {
 		if (open) await app.workspace.getLeaf(false).openFile(existing);
 		return { ok: true, message: `Note "${existing.basename}" already existed; opened it.` };
 	}
+	const path = resolveCreatePath(app, name);
 	try {
+		// Make sure the parent folder exists (create() won't create folders).
+		const slash = path.lastIndexOf("/");
+		if (slash > 0) {
+			const dir = path.slice(0, slash);
+			if (!app.vault.getAbstractFileByPath(dir)) {
+				await app.vault.createFolder(dir).catch(() => undefined);
+			}
+		}
 		const file = await app.vault.create(path, content);
 		if (open) await app.workspace.getLeaf(false).openFile(file);
-		return { ok: true, message: `Created note "${file.basename}".` };
+		const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "vault root";
+		return { ok: true, message: `Created note "${file.basename}" in ${folder}.` };
 	} catch (e) {
 		return { ok: false, message: `Could not create note: ${(e as Error).message}` };
 	}

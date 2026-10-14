@@ -236,14 +236,15 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 			toolSpec: {
 				name: "create_note",
 				description:
-					"Create a new markdown note in the vault and open it. Use when the user asks to make/start a new note, file, or page.",
+					"Create a new markdown note and open it. By default it is placed in the SAME folder as the note the user is currently working on (same topic → same folder). The user doesn't need to specify a folder; only include one in 'name' (as a path like 'Folder/Sub/Note') if they explicitly want a different location.",
 				inputSchema: {
 					json: {
 						type: "object",
 						properties: {
 							name: {
 								type: "string",
-								description: "Name or path for the new note (without needing .md).",
+								description:
+									"Note title, or a path like 'Folder/Note' only if a specific folder is requested. No need to add .md.",
 							},
 							content: {
 								type: "string",
