@@ -11,7 +11,6 @@ import {
 	NoteEdit,
 	applyEditToFile,
 	describeEdit,
-	parseReply,
 } from "./edit";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
@@ -241,6 +240,7 @@ export class AgentView extends ItemView {
 				onEnd: () => this.setListeningUI(false),
 				onError: (err) => this.onSpeechError(err),
 				onLanguage: (lang) => this.onDetectedLanguage(lang),
+				onBargeIn: () => this.onBargeIn(),
 			},
 			this.settings,
 			{
@@ -354,14 +354,13 @@ export class AgentView extends ItemView {
 				},
 				context
 			);
-			// Parse out any <edit> blocks; show only the clean spoken text.
-			const parsed = parseReply(reply.text);
-			bubble.textContent = parsed.spokenText || reply.text;
+			// Show the final spoken text in the bubble.
+			bubble.textContent = reply.text;
 			if (speak) await this.polly.endStream();
 
-			// Handle note edits if the agent proposed any.
-			if (parsed.edits.length > 0) {
-				await this.handleEdits(parsed.edits);
+			// Apply a structured note edit if the agent produced one.
+			if (reply.edit) {
+				await this.handleEdits([reply.edit]);
 			}
 		} catch (err) {
 			console.error(err);
@@ -379,6 +378,20 @@ export class AgentView extends ItemView {
 		const pt = this.settings.language === "pt-BR";
 		this.statusEl.show();
 		this.statusEl.setText(pt ? "Fala interrompida." : "Speech stopped.");
+	}
+
+	/**
+	 * User started speaking while the agent was talking: stop the agent's
+	 * audio immediately and resume listening (barge-in).
+	 */
+	private onBargeIn(): void {
+		if (!this.talkOn) return;
+		this.speechInterrupted = true;
+		this.polly.stop();
+		this.speech?.resume();
+		const pt = this.settings.language === "pt-BR";
+		this.statusEl.show();
+		this.statusEl.setText(pt ? "Pode falar..." : "Go ahead...");
 	}
 
 	private async speak(text: string, lang: AgentLanguage): Promise<void> {

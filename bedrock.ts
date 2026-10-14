@@ -4,12 +4,21 @@ import {
 	ConverseStreamCommand,
 	ConversationRole,
 	Message,
+	Tool,
+	ToolConfiguration,
 } from "@aws-sdk/client-bedrock-runtime";
 import { AgentLanguage, AgentSettings } from "./settings";
+import { NoteEdit } from "./edit";
 
 export interface ChatTurn {
 	role: "user" | "assistant";
 	text: string;
+}
+
+/** Result of a tool-enabled turn: spoken text and an optional note edit. */
+export interface ToolReply {
+	text: string;
+	edit: NoteEdit | null;
 }
 
 /**
@@ -60,20 +69,8 @@ export class BedrockService {
 
 		const editProtocol =
 			lang === "pt-BR"
-				? `\n\nVocê pode editar a nota ativa do usuário. Quando o usuário pedir para alterar, escrever ou corrigir a nota, inclua UM bloco de edição no formato exato abaixo, além de uma frase curta falada confirmando a ação. NÃO leia o JSON em voz alta; coloque-o apenas dentro das marcas <edit>.
-Formatos válidos (JSON dentro de <edit></edit>):
-<edit>{"op":"append","content":"texto a adicionar ao final"}</edit>
-<edit>{"op":"prepend","content":"texto a adicionar no início"}</edit>
-<edit>{"op":"replace","find":"texto exato existente","with":"novo texto"}</edit>
-<edit>{"op":"replace_all","content":"novo conteúdo completo da nota"}</edit>
-Use "replace" para mudanças pontuais (o "find" deve existir exatamente na nota). Só use "replace_all" quando reescrever a nota inteira. Faça no máximo uma edição por resposta.`
-				: `\n\nYou can edit the user's active note. When the user asks to change, write, or fix the note, include ONE edit block in the exact format below, plus a short spoken sentence confirming the action. Do NOT read the JSON aloud; put it only inside the <edit> markers.
-Valid formats (JSON inside <edit></edit>):
-<edit>{"op":"append","content":"text to add at the end"}</edit>
-<edit>{"op":"prepend","content":"text to add at the start"}</edit>
-<edit>{"op":"replace","find":"exact existing text","with":"new text"}</edit>
-<edit>{"op":"replace_all","content":"the full new note content"}</edit>
-Use "replace" for targeted changes (the "find" must exist exactly in the note). Only use "replace_all" when rewriting the whole note. Make at most one edit per reply.`;
+				? `\n\nVocê pode editar a nota ativa do usuário usando a ferramenta "edit_note". Quando o usuário pedir para escrever, adicionar, alterar, corrigir ou reescrever algo na nota, CHAME a ferramenta edit_note com os parâmetros apropriados — não escreva o conteúdo da edição na sua resposta falada. Depois de chamar a ferramenta, diga apenas uma frase curta confirmando. Use "replace" para mudanças pontuais e "replace_all" só para reescrever a nota inteira.`
+				: `\n\nYou can edit the user's active note using the "edit_note" tool. When the user asks to write, add, change, fix, or rewrite something in the note, CALL the edit_note tool with the right parameters — do not put the edited content in your spoken reply. After calling the tool, just say one short confirming sentence. Use "replace" for targeted changes and "replace_all" only to rewrite the whole note.`;
 
 		return base + editProtocol;
 	}
@@ -117,6 +114,104 @@ Use "replace" for targeted changes (the "find" must exist exactly in the note). 
 			throw new Error("Bedrock returned an empty response.");
 		}
 		return text;
+	}
+
+	/** Tool definition for editing the active note. */
+	private editToolConfig(): ToolConfiguration {
+		const tool: Tool = {
+			toolSpec: {
+				name: "edit_note",
+				description:
+					"Edit the user's active Obsidian note. Use this whenever the user asks to write, add, change, fix, rewrite, or remove text in the note. Prefer 'replace' for targeted changes and 'append'/'prepend' to add text; use 'replace_all' only to rewrite the whole note.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							op: {
+								type: "string",
+								enum: ["append", "prepend", "replace", "replace_all"],
+								description: "The kind of edit to perform.",
+							},
+							content: {
+								type: "string",
+								description:
+									"Text to add (for append/prepend) or the full new note (for replace_all).",
+							},
+							find: {
+								type: "string",
+								description: "For 'replace': the exact existing text to find.",
+							},
+							with: {
+								type: "string",
+								description: "For 'replace': the text to replace it with.",
+							},
+						},
+						required: ["op"],
+					},
+				},
+			},
+		};
+		return { tools: [tool] };
+	}
+
+	/**
+	 * Tool-enabled turn used when note editing is allowed. The model either
+	 * replies with text (spoken) or calls the edit_note tool with structured
+	 * arguments — far more reliable than parsing JSON out of the text.
+	 */
+	async converseWithTools(
+		userText: string,
+		history: ChatTurn[],
+		lang: AgentLanguage,
+		context?: string
+	): Promise<ToolReply> {
+		const messages: Message[] = [];
+		for (const turn of history) {
+			messages.push({
+				role: turn.role === "user" ? ConversationRole.USER : ConversationRole.ASSISTANT,
+				content: [{ text: turn.text }],
+			});
+		}
+		const userContent = context?.trim()
+			? [{ text: context.trim() }, { text: userText }]
+			: [{ text: userText }];
+		messages.push({ role: ConversationRole.USER, content: userContent });
+
+		const command = new ConverseCommand({
+			modelId: this.settings.bedrockModelId,
+			messages,
+			system: [{ text: this.systemPrompt(lang) }],
+			inferenceConfig: {
+				maxTokens: this.settings.maxTokens,
+				temperature: this.settings.temperature,
+			},
+			toolConfig: this.editToolConfig(),
+		});
+
+		const response = await this.getClient().send(command);
+		const blocks = response.output?.message?.content ?? [];
+
+		let text = "";
+		let edit: NoteEdit | null = null;
+		for (const b of blocks) {
+			if ("text" in b && b.text) {
+				text += b.text;
+			} else if ("toolUse" in b && b.toolUse) {
+				edit = toNoteEdit(b.toolUse.input);
+			}
+		}
+		text = text.trim();
+		if (!text) {
+			// Provide a short spoken confirmation if the model only called the tool.
+			text = edit
+				? lang === "pt-BR"
+					? "Pronto, atualizei a nota."
+					: "Done, I updated the note."
+				: lang === "pt-BR"
+				? "Certo."
+				: "Okay.";
+		}
+		return { text, edit };
 	}
 
 	/**
@@ -208,6 +303,26 @@ Use "replace" for targeted changes (the "find" must exist exactly in the note). 
 			throw new Error("Bedrock returned an empty response.");
 		}
 		return result;
+	}
+}
+
+/** Convert a tool_use input object into a validated NoteEdit, or null. */
+function toNoteEdit(input: unknown): NoteEdit | null {
+	if (!input || typeof input !== "object") return null;
+	const o = input as Record<string, unknown>;
+	switch (o.op) {
+		case "replace_all":
+			return typeof o.content === "string" ? { op: "replace_all", content: o.content } : null;
+		case "append":
+			return typeof o.content === "string" ? { op: "append", content: o.content } : null;
+		case "prepend":
+			return typeof o.content === "string" ? { op: "prepend", content: o.content } : null;
+		case "replace":
+			return typeof o.find === "string" && typeof o.with === "string"
+				? { op: "replace", find: o.find, with: o.with }
+				: null;
+		default:
+			return null;
 	}
 }
 

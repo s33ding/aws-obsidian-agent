@@ -42,6 +42,8 @@ export interface SpeechCallbacks {
 	onLevel?: (level: number) => void;
 	/** Fired when Transcribe detects the spoken language (auto-detect mode). */
 	onLanguage?: (lang: AgentLanguage) => void;
+	/** Fired when sustained user speech is detected while suspended (barge-in). */
+	onBargeIn?: () => void;
 }
 
 /**
@@ -77,6 +79,11 @@ export class SpeechInput {
 	private partialBuffer = "";
 	private silenceTimer: number | null = null;
 	private speaking = false;
+
+	// Barge-in: accumulate ms of loud input while suspended, fire once.
+	private bargeInLoudMs = 0;
+	private bargeInFired = false;
+	private lastTickTs = 0;
 
 	constructor(
 		lang: AgentLanguage,
@@ -135,12 +142,18 @@ export class SpeechInput {
 		this.suspended = true;
 		this.clearSilenceTimer();
 		this.transcribe.stop();
+		// Arm barge-in detection for this playback window.
+		this.bargeInLoudMs = 0;
+		this.bargeInFired = false;
+		this.lastTickTs = 0;
 		this.callbacks.onLevel?.(0);
 	}
 
 	resume(): void {
 		if (!this.active || !this.suspended) return;
 		this.suspended = false;
+		this.bargeInLoudMs = 0;
+		this.bargeInFired = false;
 		this.finalBuffer = "";
 		this.partialBuffer = "";
 		this.startTranscription();
@@ -251,6 +264,10 @@ export class SpeechInput {
 		if (!analyser) return;
 		const data = new Uint8Array(analyser.fftSize);
 		const SPEECH_THRESHOLD = 0.06;
+		// Barge-in needs a louder, sustained signal to avoid tripping on the
+		// agent's own audio echoing back (echoCancellation also helps).
+		const BARGE_IN_THRESHOLD = 0.12;
+		const BARGE_IN_MS = 250; // sustained loud input to count as a barge-in
 
 		const tick = () => {
 			if (!this.analyser) return;
@@ -262,13 +279,37 @@ export class SpeechInput {
 			}
 			const rms = Math.sqrt(sum / data.length);
 			const level = Math.min(1, rms * 3);
+
 			if (!this.suspended) {
 				this.callbacks.onLevel?.(level);
 				this.handleVad(rms > SPEECH_THRESHOLD);
+			} else {
+				// Agent is speaking: watch for the user interrupting.
+				this.detectBargeIn(rms > BARGE_IN_THRESHOLD, BARGE_IN_MS);
 			}
+
 			this.levelRaf = requestAnimationFrame(tick);
 		};
 		this.levelRaf = requestAnimationFrame(tick);
+	}
+
+	/** Accumulate loud time while suspended; fire onBargeIn once past the threshold. */
+	private detectBargeIn(loud: boolean, neededMs: number): void {
+		if (this.bargeInFired) return;
+		const now = performance.now();
+		const dt = this.lastTickTs ? now - this.lastTickTs : 16;
+		this.lastTickTs = now;
+		if (loud) {
+			this.bargeInLoudMs += dt;
+			if (this.bargeInLoudMs >= neededMs) {
+				this.bargeInFired = true;
+				this.bargeInLoudMs = 0;
+				this.callbacks.onBargeIn?.();
+			}
+		} else {
+			// Decay quickly so brief noises don't accumulate.
+			this.bargeInLoudMs = Math.max(0, this.bargeInLoudMs - dt);
+		}
 	}
 
 	// ---- Endpointing -------------------------------------------------------
