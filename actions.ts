@@ -9,7 +9,9 @@ import { NoteEdit, applyEditToFile } from "./edit";
 export type AgentAction =
 	| { kind: "edit"; edit: NoteEdit }
 	| { kind: "set_view_mode"; mode: "source" | "preview" }
-	| { kind: "add_link"; target: string; alias?: string };
+	| { kind: "add_link"; target: string; alias?: string }
+	| { kind: "create_note"; name: string; content?: string; open?: boolean }
+	| { kind: "open_note"; name: string };
 
 export interface ActionResult {
 	ok: boolean;
@@ -48,6 +50,66 @@ export async function addLink(
 		ok,
 		message: ok ? `Linked to [[${target}]].` : "Could not add the link.",
 	};
+}
+
+/** Normalize a note name into a vault path ending in .md. */
+function toNotePath(name: string): string {
+	let p = name.trim().replace(/^\/+/, "");
+	// Strip wiki-link brackets if the model passed "[[Note]]".
+	p = p.replace(/^\[\[|\]\]$/g, "");
+	if (!p.toLowerCase().endsWith(".md")) p += ".md";
+	return p;
+}
+
+/** Find an existing markdown note by name or path (case-insensitive). */
+function findNote(app: App, name: string): TFile | null {
+	const path = toNotePath(name);
+	const direct = app.vault.getAbstractFileByPath(path);
+	if (direct instanceof TFile) return direct;
+	const base = path.toLowerCase();
+	const bare = base.replace(/\.md$/, "");
+	return (
+		app.vault.getMarkdownFiles().find((f) => {
+			return (
+				f.path.toLowerCase() === base ||
+				f.basename.toLowerCase() === bare ||
+				f.name.toLowerCase() === base
+			);
+		}) ?? null
+	);
+}
+
+/**
+ * Create a new note. If a note with that name already exists, it is opened
+ * instead of overwritten (safe by default). Opens the note unless open=false.
+ */
+export async function createNote(
+	app: App,
+	name: string,
+	content = "",
+	open = true
+): Promise<ActionResult> {
+	const path = toNotePath(name);
+	const existing = findNote(app, name);
+	if (existing) {
+		if (open) await app.workspace.getLeaf(false).openFile(existing);
+		return { ok: true, message: `Note "${existing.basename}" already existed; opened it.` };
+	}
+	try {
+		const file = await app.vault.create(path, content);
+		if (open) await app.workspace.getLeaf(false).openFile(file);
+		return { ok: true, message: `Created note "${file.basename}".` };
+	} catch (e) {
+		return { ok: false, message: `Could not create note: ${(e as Error).message}` };
+	}
+}
+
+/** Open (switch to) an existing note in the current tab. */
+export async function openNote(app: App, name: string): Promise<ActionResult> {
+	const file = findNote(app, name);
+	if (!file) return { ok: false, message: `Note "${name}" not found.` };
+	await app.workspace.getLeaf(false).openFile(file);
+	return { ok: true, message: `Opened "${file.basename}".` };
 }
 
 /** Summary of the vault's link graph for analysis / suggestions. */

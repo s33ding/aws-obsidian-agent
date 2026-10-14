@@ -71,12 +71,16 @@ export class BedrockService {
 		const editProtocol =
 			lang === "pt-BR"
 				? `\n\nFerramentas disponíveis — CHAME direto, sem pedir permissão nem repetir o conteúdo na fala:
-- edit_note: alterar a nota (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- edit_note: alterar a nota ativa (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- create_note: criar uma nota nova (name, content opcional) e abri-la.
+- open_note: abrir/trocar para outra nota existente.
 - set_view_mode: trocar a aba entre edição ("source") e leitura ("preview").
 - add_link: melhorar o grafo adicionando um [[link]] da nota ativa para outra nota.
 Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (links formam o grafo). Depois confirme em uma frase curta.`
 				: `\n\nAvailable tools — CALL them directly, don't ask permission or repeat the content in speech:
-- edit_note: change the note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- edit_note: change the active note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- create_note: create a new note (name, optional content) and open it.
+- open_note: open/switch to another existing note.
 - set_view_mode: switch the tab between editing ("source") and reading ("preview").
 - add_link: improve the graph by adding a [[link]] from the active note to another note.
 To improve the Obsidian graph, connect related notes with add_link (links form the graph). Then confirm in one short sentence.`;
@@ -228,7 +232,49 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				},
 			},
 		};
-		return { tools: [tool, setViewMode, addLink] };
+		const createNoteTool: Tool = {
+			toolSpec: {
+				name: "create_note",
+				description:
+					"Create a new markdown note in the vault and open it. Use when the user asks to make/start a new note, file, or page.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							name: {
+								type: "string",
+								description: "Name or path for the new note (without needing .md).",
+							},
+							content: {
+								type: "string",
+								description: "Optional initial markdown content.",
+							},
+						},
+						required: ["name"],
+					},
+				},
+			},
+		};
+		const openNoteTool: Tool = {
+			toolSpec: {
+				name: "open_note",
+				description:
+					"Open an existing note, switching the view to it. Use when the user asks to go to, open, or show another note.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							name: {
+								type: "string",
+								description: "Name or path of the note to open.",
+							},
+						},
+						required: ["name"],
+					},
+				},
+			},
+		};
+		return { tools: [tool, setViewMode, addLink, createNoteTool, openNoteTool] };
 	}
 
 	/**
@@ -404,6 +450,16 @@ function toAgentAction(name: string | undefined, input: unknown): AgentAction | 
 						alias: typeof o.alias === "string" ? o.alias : undefined,
 				  }
 				: null;
+		case "create_note":
+			return typeof o.name === "string"
+				? {
+						kind: "create_note",
+						name: o.name,
+						content: typeof o.content === "string" ? o.content : undefined,
+				  }
+				: null;
+		case "open_note":
+			return typeof o.name === "string" ? { kind: "open_note", name: o.name } : null;
 		default:
 			return null;
 	}

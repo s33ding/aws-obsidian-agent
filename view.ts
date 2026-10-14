@@ -12,7 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
-import { AgentAction, setViewMode, addLink } from "./actions";
+import { AgentAction, setViewMode, addLink, createNote, openNote } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -473,6 +473,12 @@ export class AgentView extends ItemView {
 					continue;
 				}
 				const res = await addLink(this.app, file, action.target, action.alias);
+				this.addMessage("system", res.message);
+			} else if (action.kind === "create_note") {
+				const res = await createNote(this.app, action.name, action.content ?? "", true);
+				this.addMessage("system", res.message);
+			} else if (action.kind === "open_note") {
+				const res = await openNote(this.app, action.name);
 				this.addMessage("system", res.message);
 			}
 		}
