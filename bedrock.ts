@@ -109,7 +109,8 @@ export class BedrockService {
 		userText: string,
 		history: ChatTurn[],
 		lang: AgentLanguage,
-		onSentence: (sentence: string) => void
+		onSentence: (sentence: string) => void,
+		context?: string
 	): Promise<string> {
 		const messages: Message[] = [];
 		for (const turn of history) {
@@ -118,7 +119,14 @@ export class BedrockService {
 				content: [{ text: turn.text }],
 			});
 		}
-		messages.push({ role: ConversationRole.USER, content: [{ text: userText }] });
+
+		// If note context is provided, prepend it as a separate text block in
+		// the current user turn so the model can reference what the user is
+		// looking at. History stores only the raw user message (set by caller).
+		const userContent = context?.trim()
+			? [{ text: context.trim() }, { text: userText }]
+			: [{ text: userText }];
+		messages.push({ role: ConversationRole.USER, content: userContent });
 
 		const command = new ConverseStreamCommand({
 			modelId: this.settings.bedrockModelId,

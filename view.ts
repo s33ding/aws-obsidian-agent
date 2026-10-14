@@ -301,21 +301,27 @@ export class AgentView extends ItemView {
 		const lang = this.settings.language;
 		const speak = this.settings.speakResponses;
 
+		// Gather context from the active markdown note, if enabled.
+		const context = await this.buildNoteContext();
+
 		// Create a live agent message bubble we append sentences to.
 		const bubble = this.addMessage("agent", "");
 
 		if (speak) this.polly.beginStream();
 
 		try {
-			const reply = await this.agent.respondStream(text, (sentence) => {
-				// Append to the visible bubble as it streams in.
-				bubble.textContent = (bubble.textContent
-					? bubble.textContent + " "
-					: "") + sentence;
-				this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
-				// Pipe each sentence into the audio queue immediately.
-				if (speak) this.polly.enqueue(sentence, lang);
-			});
+			const reply = await this.agent.respondStream(
+				text,
+				(sentence) => {
+					// Append to the visible bubble as it streams in.
+					bubble.textContent =
+						(bubble.textContent ? bubble.textContent + " " : "") + sentence;
+					this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+					// Pipe each sentence into the audio queue immediately.
+					if (speak) this.polly.enqueue(sentence, lang);
+				},
+				context
+			);
 			// Ensure final text matches the full reply.
 			bubble.textContent = reply.text;
 			if (speak) await this.polly.endStream();
@@ -337,6 +343,38 @@ export class AgentView extends ItemView {
 			new Notice(`Polly error: ${(err as Error).message}`);
 			this.addMessage("system", `Speech error: ${(err as Error).message}`);
 		}
+	}
+
+	/**
+	 * Read the active markdown note (the current tab) and format it as context
+	 * for the model. Returns undefined if disabled or no note is active.
+	 */
+	private async buildNoteContext(): Promise<string | undefined> {
+		if (!this.settings.includeActiveNote) return undefined;
+
+		const file = this.app.workspace.getActiveFile();
+		if (!file || file.extension !== "md") return undefined;
+
+		let content: string;
+		try {
+			content = await this.app.vault.read(file);
+		} catch (err) {
+			console.error("Failed to read active note:", err);
+			return undefined;
+		}
+
+		const max = this.settings.maxNoteChars;
+		let body = content;
+		if (body.length > max) {
+			body = body.slice(0, max) + "\n...[truncated]";
+		}
+		if (!body.trim()) return undefined;
+
+		const pt = this.settings.language === "pt-BR";
+		const header = pt
+			? `Contexto: a nota que o usuário está vendo agora é "${file.basename}". Conteúdo entre as marcas.`
+			: `Context: the note the user is currently viewing is "${file.basename}". Content is between the markers.`;
+		return `${header}\n<nota>\n${body}\n</nota>`;
 	}
 
 	private addMessage(role: "user" | "agent" | "system", text: string): HTMLElement {

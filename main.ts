@@ -278,6 +278,30 @@ class AgentSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			.setName("Use active note as context")
+			.setDesc("Let the agent read the markdown note in the current tab so it can answer about what you're viewing.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.includeActiveNote).onChange(async (v) => {
+					this.plugin.settings.includeActiveNote = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Max note characters")
+			.setDesc("Cap how much of the active note is sent as context (controls token usage).")
+			.addSlider((s) =>
+				s
+					.setLimits(1000, 20000, 1000)
+					.setValue(this.plugin.settings.maxNoteChars)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.maxNoteChars = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
 		containerEl.createEl("h3", { text: "AWS credentials" });
 
 		new Setting(containerEl)

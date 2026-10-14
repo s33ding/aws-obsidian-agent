@@ -19,6 +19,8 @@ export interface AgentSettings {
 	systemPrompt: string;
 	maxTokens: number;
 	temperature: number;
+	includeActiveNote: boolean;
+	maxNoteChars: number;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -40,6 +42,8 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	systemPrompt: "",
 	maxTokens: 512,
 	temperature: 0.7,
+	includeActiveNote: true,
+	maxNoteChars: 6000,
 };
 
 // Bedrock models verified available in the account (Converse-compatible).

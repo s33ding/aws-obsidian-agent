@@ -82,7 +82,8 @@ export class Agent {
 	 */
 	async respondStream(
 		message: string,
-		onSentence: (sentence: string) => void
+		onSentence: (sentence: string) => void,
+		context?: string
 	): Promise<AgentReply> {
 		const msg = message.trim();
 		if (!msg) {
@@ -97,8 +98,11 @@ export class Agent {
 					msg,
 					this.history,
 					this.lang,
-					onSentence
+					onSentence,
+					context
 				);
+				// Store only the user's own message in history, not the note
+				// context (which can change and would bloat later turns).
 				this.history.push({ role: "user", text: msg });
 				this.history.push({ role: "assistant", text: reply });
 				this.trimHistory();
