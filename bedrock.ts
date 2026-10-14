@@ -9,16 +9,17 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { AgentLanguage, AgentSettings } from "./settings";
 import { NoteEdit, toNoteEdit } from "./edit";
+import { AgentAction } from "./actions";
 
 export interface ChatTurn {
 	role: "user" | "assistant";
 	text: string;
 }
 
-/** Result of a tool-enabled turn: spoken text and an optional note edit. */
+/** Result of a tool-enabled turn: spoken text and any actions to perform. */
 export interface ToolReply {
 	text: string;
-	edit: NoteEdit | null;
+	actions: AgentAction[];
 }
 
 /**
@@ -69,8 +70,16 @@ export class BedrockService {
 
 		const editProtocol =
 			lang === "pt-BR"
-				? `\n\nVocê edita a nota ativa com a ferramenta edit_note. Se o usuário pedir qualquer alteração na nota (escrever, adicionar, corrigir, reorganizar, reescrever), CHAME edit_note direto — não peça permissão e não repita o conteúdo na fala. Prefira "replace" para trechos e "append"/"prepend" para adicionar; "replace_all" só para reescrever tudo. Depois, confirme em uma frase curta (ex.: "Pronto, adicionei.").`
-				: `\n\nYou edit the active note with the edit_note tool. If the user asks for any change to the note (write, add, fix, reorganize, rewrite), CALL edit_note directly — don't ask permission and don't repeat the content in speech. Prefer "replace" for snippets and "append"/"prepend" to add; "replace_all" only to rewrite everything. Then confirm in one short sentence (e.g., "Done, added it.").`;
+				? `\n\nFerramentas disponíveis — CHAME direto, sem pedir permissão nem repetir o conteúdo na fala:
+- edit_note: alterar a nota (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- set_view_mode: trocar a aba entre edição ("source") e leitura ("preview").
+- add_link: melhorar o grafo adicionando um [[link]] da nota ativa para outra nota.
+Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (links formam o grafo). Depois confirme em uma frase curta.`
+				: `\n\nAvailable tools — CALL them directly, don't ask permission or repeat the content in speech:
+- edit_note: change the note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
+- set_view_mode: switch the tab between editing ("source") and reading ("preview").
+- add_link: improve the graph by adding a [[link]] from the active note to another note.
+To improve the Obsidian graph, connect related notes with add_link (links form the graph). Then confirm in one short sentence.`;
 
 		return base + editProtocol;
 	}
@@ -176,7 +185,50 @@ export class BedrockService {
 				},
 			},
 		};
-		return { tools: [tool] };
+		const setViewMode: Tool = {
+			toolSpec: {
+				name: "set_view_mode",
+				description:
+					"Switch the active note's tab between editing and reading view. Use when the user asks to read/preview or to edit/write mode.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							mode: {
+								type: "string",
+								enum: ["source", "preview"],
+								description: "'source' = editing view, 'preview' = reading view.",
+							},
+						},
+						required: ["mode"],
+					},
+				},
+			},
+		};
+		const addLink: Tool = {
+			toolSpec: {
+				name: "add_link",
+				description:
+					"Improve the knowledge graph by adding a [[wikilink]] from the active note to another note. Use when the user wants to connect notes or reduce orphan notes.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							target: {
+								type: "string",
+								description: "The note name to link to (without brackets).",
+							},
+							alias: {
+								type: "string",
+								description: "Optional display text for the link.",
+							},
+						},
+						required: ["target"],
+					},
+				},
+			},
+		};
+		return { tools: [tool, setViewMode, addLink] };
 	}
 
 	/**
@@ -217,26 +269,27 @@ export class BedrockService {
 		const blocks = response.output?.message?.content ?? [];
 
 		let text = "";
-		let edit: NoteEdit | null = null;
+		const actions: AgentAction[] = [];
 		for (const b of blocks) {
 			if ("text" in b && b.text) {
 				text += b.text;
 			} else if ("toolUse" in b && b.toolUse) {
-				edit = toNoteEdit(b.toolUse.input);
+				const action = toAgentAction(b.toolUse.name, b.toolUse.input);
+				if (action) actions.push(action);
 			}
 		}
 		text = text.trim();
 		if (!text) {
-			// Provide a short spoken confirmation if the model only called the tool.
-			text = edit
-				? lang === "pt-BR"
-					? "Pronto, atualizei a nota."
-					: "Done, I updated the note."
-				: lang === "pt-BR"
-				? "Certo."
-				: "Okay.";
+			text =
+				actions.length > 0
+					? lang === "pt-BR"
+						? "Pronto."
+						: "Done."
+					: lang === "pt-BR"
+					? "Certo."
+					: "Okay.";
 		}
-		return { text, edit };
+		return { text, actions };
 	}
 
 	/**
@@ -328,6 +381,31 @@ export class BedrockService {
 			throw new Error("Bedrock returned an empty response.");
 		}
 		return result;
+	}
+}
+
+/** Map a tool_use (name + input) to a structured AgentAction, or null. */
+function toAgentAction(name: string | undefined, input: unknown): AgentAction | null {
+	const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	switch (name) {
+		case "edit_note": {
+			const edit = toNoteEdit(input);
+			return edit ? { kind: "edit", edit } : null;
+		}
+		case "set_view_mode":
+			return o.mode === "source" || o.mode === "preview"
+				? { kind: "set_view_mode", mode: o.mode }
+				: null;
+		case "add_link":
+			return typeof o.target === "string"
+				? {
+						kind: "add_link",
+						target: o.target,
+						alias: typeof o.alias === "string" ? o.alias : undefined,
+				  }
+				: null;
+		default:
+			return null;
 	}
 }
 

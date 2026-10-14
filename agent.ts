@@ -1,11 +1,11 @@
 import { BedrockService, ChatTurn } from "./bedrock";
 import { AgentLanguage, AgentSettings } from "./settings";
-import { NoteEdit } from "./edit";
+import { AgentAction } from "./actions";
 
 export interface AgentReply {
 	text: string;
 	lang: AgentLanguage;
-	edit?: NoteEdit | null;
+	actions?: AgentAction[];
 }
 
 /**
@@ -97,7 +97,8 @@ export class Agent {
 		if (this.settings.useBedrock) {
 			try {
 				// When editing is allowed, use the tool-enabled (non-streaming)
-				// path so the model returns a structured edit instead of prose.
+				// path so the model returns structured actions (edit, view mode,
+				// links) instead of prose.
 				if (this.settings.allowEditing) {
 					const result = await this.bedrock.converseWithTools(
 						msg,
@@ -109,7 +110,7 @@ export class Agent {
 					this.history.push({ role: "user", text: msg });
 					this.history.push({ role: "assistant", text: result.text });
 					this.trimHistory();
-					return { text: result.text, lang: this.lang, edit: result.edit };
+					return { text: result.text, lang: this.lang, actions: result.actions };
 				}
 
 				const reply = await this.bedrock.converseStream(

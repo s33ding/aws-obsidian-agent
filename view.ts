@@ -12,6 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
+import { AgentAction, setViewMode, addLink } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -359,10 +360,10 @@ export class AgentView extends ItemView {
 			bubble.textContent = reply.text;
 			if (speak) await this.polly.endStream();
 
-			// Apply a structured note edit if the agent produced one.
-			console.log("[agent] reply.edit =", JSON.stringify(reply.edit));
-			if (reply.edit) {
-				await this.handleEdits([reply.edit]);
+			// Execute any structured actions the agent produced.
+			console.log("[agent] reply.actions =", JSON.stringify(reply.actions));
+			if (reply.actions && reply.actions.length > 0) {
+				await this.executeActions(reply.actions);
 			}
 		} catch (err) {
 			console.error(err);
@@ -437,6 +438,30 @@ export class AgentView extends ItemView {
 			? `Contexto: a nota que o usuário está vendo agora é "${file.basename}". Conteúdo entre as marcas.`
 			: `Context: the note the user is currently viewing is "${file.basename}". Content is between the markers.`;
 		return `${header}\n<nota>\n${body}\n</nota>`;
+	}
+
+	/** Dispatch structured agent actions (edits, view mode, graph links). */
+	private async executeActions(actions: AgentAction[]): Promise<void> {
+		const pt = this.settings.language === "pt-BR";
+		for (const action of actions) {
+			if (action.kind === "edit") {
+				await this.handleEdits([action.edit]);
+			} else if (action.kind === "set_view_mode") {
+				const res = await setViewMode(this.app, action.mode);
+				this.addMessage("system", res.message);
+			} else if (action.kind === "add_link") {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") {
+					this.addMessage(
+						"system",
+						pt ? "Nenhuma nota ativa para linkar." : "No active note to link."
+					);
+					continue;
+				}
+				const res = await addLink(this.app, file, action.target, action.alias);
+				this.addMessage("system", res.message);
+			}
+		}
 	}
 
 	/**
