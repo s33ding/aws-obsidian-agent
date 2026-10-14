@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, WorkspaceLeaf } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import { Agent } from "./agent";
 import { PollyService } from "./polly";
 import {
@@ -42,6 +42,12 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 			id: "open-aws-agent",
 			name: "Open AWS Agent",
 			callback: () => void this.activateView(),
+		});
+
+		this.addCommand({
+			id: "self-test",
+			name: "Run self-test (diagnostics)",
+			callback: () => void this.runSelfTest(),
 		});
 
 		this.addCommand({
@@ -98,6 +104,69 @@ export default class AwsObsidianAgentPlugin extends Plugin {
 
 	onunload(): void {
 		this.polly?.stop();
+	}
+
+	/**
+	 * Run a visible, end-to-end diagnostic and write the results into a new
+	 * note so the user can see exactly what works without the dev console.
+	 */
+	async runSelfTest(): Promise<void> {
+		const lines: string[] = ["# AWS Obsidian Agent — Self Test", "", `Run at ${new Date().toLocaleString()}`, ""];
+		const ok = (b: boolean) => (b ? "✅" : "❌");
+		new Notice("Running self-test…");
+
+		// 1. Settings / credentials presence
+		const hasCreds =
+			this.settings.useAmbientCredentials ||
+			(!!this.settings.awsAccessKeyId && !!this.settings.awsSecretAccessKey);
+		lines.push(`- ${ok(hasCreds)} Credentials configured (region: ${this.settings.awsRegion})`);
+		lines.push(`- ${ok(this.settings.useBedrock)} Bedrock enabled (model: ${this.settings.bedrockModelId})`);
+		lines.push(`- ${ok(this.settings.allowEditing)} Note editing enabled`);
+
+		// 2. Active note / vault write test
+		const file = this.app.workspace.getActiveFile();
+		lines.push(`- ${ok(!!file)} Active note detected${file ? `: ${file.path}` : " (open a note before testing writes)"}`);
+
+		// 3. Bedrock text round-trip
+		try {
+			const reply = await this.agent.respond("Responda apenas com a palavra OK.");
+			const good = /ok/i.test(reply.text);
+			lines.push(`- ${ok(good)} Bedrock responded: "${reply.text.slice(0, 60)}"`);
+		} catch (e) {
+			lines.push(`- ❌ Bedrock error: ${(e as Error).message}`);
+		}
+
+		// 4. Polly synthesis
+		try {
+			const bytes = await this.polly.synthesize("teste de voz", this.settings.language);
+			lines.push(`- ${ok(bytes.length > 0)} Polly synthesized audio (${bytes.length} bytes)`);
+		} catch (e) {
+			lines.push(`- ❌ Polly error: ${(e as Error).message}`);
+		}
+
+		// 5. Microphone availability (not permission)
+		const micApi = !!navigator.mediaDevices?.getUserMedia;
+		lines.push(`- ${ok(micApi)} Microphone API available`);
+		const workletApi = typeof AudioWorkletNode !== "undefined";
+		lines.push(`- ${ok(workletApi)} AudioWorklet available (voice capture)`);
+
+		lines.push("", "> If Bedrock and Polly show ✅, the chat + voice reply work. For voice input, open the agent, press 🎤 Talk and allow the mic.");
+
+		const report = lines.join("\n");
+		const path = `AWS-Agent-SelfTest.md`;
+		try {
+			const existing = this.app.vault.getAbstractFileByPath(path);
+			if (existing && existing instanceof TFile) {
+				await this.app.vault.modify(existing, report);
+				await this.app.workspace.getLeaf(true).openFile(existing);
+			} else {
+				const created = await this.app.vault.create(path, report);
+				await this.app.workspace.getLeaf(true).openFile(created);
+			}
+			new Notice("Self-test complete — see the report note.");
+		} catch (e) {
+			new Notice("Self-test wrote results but failed to open note: " + (e as Error).message);
+		}
 	}
 
 	async activateView(): Promise<void> {
