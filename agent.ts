@@ -41,10 +41,7 @@ export class Agent {
 	}
 
 	greeting(): AgentReply {
-		const text =
-			this.lang === "pt-BR"
-				? "Olá! Eu sou o seu agente. Pode falar comigo e eu respondo em voz alta."
-				: "Hi! I'm your agent. Talk to me and I'll answer out loud.";
+		const text = this.lang === "pt-BR" ? "Oi!" : "Hello!";
 		return { text, lang: this.lang };
 	}
 
@@ -152,7 +149,7 @@ export class Agent {
 		const pt = this.lang === "pt-BR";
 
 		if (/\b(oi|ol[aá]|hello|hi|hey)\b/.test(lower)) {
-			return pt ? "Olá! Como posso ajudar você hoje?" : "Hello! How can I help you today?";
+			return pt ? "Oi!" : "Hello!";
 		}
 		if (/\b(obrigad|thanks|thank you)\b/.test(lower)) {
 			return pt ? "De nada! Precisa de mais alguma coisa?" : "You're welcome! Anything else?";
