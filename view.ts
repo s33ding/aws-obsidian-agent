@@ -12,7 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
-import { AgentAction, setViewMode, addLink, createNote, openNote, renameNote, deleteNote } from "./actions";
+import { AgentAction, setViewMode, addLink, createNote, openNote, renameNote, deleteNote, researchAndInsert } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -492,6 +492,18 @@ export class AgentView extends ItemView {
 				} else {
 					this.addMessage("system", pt ? "Exclusão cancelada." : "Deletion cancelled.");
 				}
+			} else if (action.kind === "research_media") {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") {
+					this.addMessage("system", pt ? "Abra uma nota primeiro." : "Open a note first.");
+					continue;
+				}
+				this.addMessage(
+					"system",
+					(pt ? "🔎 Pesquisando: " : "🔎 Researching: ") + action.query + "…"
+				);
+				const res = await researchAndInsert(this.app, file, action.query, action.mediaType);
+				this.addMessage("system", res.message);
 			}
 		}
 	}

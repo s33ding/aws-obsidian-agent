@@ -78,6 +78,7 @@ export class BedrockService {
 - delete_note: excluir uma nota (vai para a lixeira; só quando o usuário pedir claramente).
 - set_view_mode: trocar a aba entre edição ("source") e leitura ("preview").
 - add_link: melhorar o grafo adicionando um [[link]] da nota ativa para outra nota.
+- research_media: pesquisar na internet e inserir na nota — imagem/vídeo (embed) ou informação atual (preços AWS, estatísticas, notícias) como texto.
 Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (links formam o grafo). Depois confirme em uma frase curta.`
 				: `\n\nAvailable tools — CALL them directly, don't ask permission or repeat the content in speech:
 - edit_note: change the active note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
@@ -87,6 +88,7 @@ Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (link
 - delete_note: delete a note (moves to trash; only when the user clearly asks).
 - set_view_mode: switch the tab between editing ("source") and reading ("preview").
 - add_link: improve the graph by adding a [[link]] from the active note to another note.
+- research_media: search the internet and insert into the note — image/video (embed) or current info (AWS prices, statistics, news) as text.
 To improve the Obsidian graph, connect related notes with add_link (links form the graph). Then confirm in one short sentence.`;
 
 		return base + editProtocol;
@@ -312,6 +314,30 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				},
 			},
 		};
+		const researchMediaTool: Tool = {
+			toolSpec: {
+				name: "research_media",
+				description:
+					"Search the internet and insert the result into the active note. Use for 'find an image/video of X and put it here', or for current factual info (AWS prices, statistics, news). mediaType 'image' or 'video' embeds media; 'fact' inserts researched text.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							query: {
+								type: "string",
+								description: "What to search for.",
+							},
+							mediaType: {
+								type: "string",
+								enum: ["image", "video", "fact"],
+								description: "image/video to embed media; fact for text info.",
+							},
+						},
+						required: ["query", "mediaType"],
+					},
+				},
+			},
+		};
 		return {
 			tools: [
 				tool,
@@ -321,6 +347,7 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				openNoteTool,
 				renameNoteTool,
 				deleteNoteTool,
+				researchMediaTool,
 			],
 		};
 	}
@@ -514,6 +541,11 @@ function toAgentAction(name: string | undefined, input: unknown): AgentAction | 
 				: null;
 		case "delete_note":
 			return typeof o.name === "string" ? { kind: "delete_note", name: o.name } : null;
+		case "research_media":
+			return typeof o.query === "string" &&
+				(o.mediaType === "image" || o.mediaType === "video" || o.mediaType === "fact")
+				? { kind: "research_media", query: o.query, mediaType: o.mediaType }
+				: null;
 		default:
 			return null;
 	}

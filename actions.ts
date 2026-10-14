@@ -1,5 +1,6 @@
 import { App, MarkdownView, TFile } from "obsidian";
 import { NoteEdit, applyEditToFile } from "./edit";
+import { KiroResearch, firstUrl } from "./kirocli";
 
 /**
  * Actions the agent can take beyond editing note content: switching the view
@@ -13,7 +14,8 @@ export type AgentAction =
 	| { kind: "create_note"; name: string; content?: string; open?: boolean }
 	| { kind: "open_note"; name: string }
 	| { kind: "rename_note"; name: string; newName: string }
-	| { kind: "delete_note"; name: string };
+	| { kind: "delete_note"; name: string }
+	| { kind: "research_media"; query: string; mediaType: "image" | "video" | "fact" };
 
 export interface ActionResult {
 	ok: boolean;
@@ -188,6 +190,58 @@ export async function deleteNote(app: App, name: string): Promise<ActionResult> 
 	} catch (e) {
 		return { ok: false, message: `Could not delete: ${(e as Error).message}` };
 	}
+}
+
+/**
+ * Research the web via Kiro CLI and insert the result into the active note.
+ * - image: embeds `![](url)`
+ * - video: embeds the video URL (Obsidian renders YouTube/Vimeo as a player)
+ * - fact:  inserts the researched text
+ */
+export async function researchAndInsert(
+	app: App,
+	file: TFile,
+	query: string,
+	mediaType: "image" | "video" | "fact"
+): Promise<ActionResult> {
+	const kiro = new KiroResearch();
+	let prompt: string;
+	if (mediaType === "image") {
+		prompt = `Search the web for a freely-usable image matching: "${query}". Reply with ONLY the direct image URL (ending in .jpg, .jpeg, .png, .gif or .webp). No other text.`;
+	} else if (mediaType === "video") {
+		prompt = `Search the web for a YouTube video matching: "${query}". Reply with ONLY the full YouTube watch URL. No other text.`;
+	} else {
+		prompt = `Research this and answer concisely with current, factual information: "${query}". Reply with a short plain-text answer only.`;
+	}
+
+	let answer: string;
+	try {
+		answer = await kiro.run(prompt);
+	} catch (e) {
+		return { ok: false, message: `Research failed: ${(e as Error).message}` };
+	}
+	if (!answer) return { ok: false, message: "Research returned nothing." };
+
+	let snippet: string;
+	if (mediaType === "fact") {
+		snippet = answer;
+	} else {
+		const url = firstUrl(answer);
+		if (!url) return { ok: false, message: `No usable URL found for "${query}".` };
+		// Obsidian embeds remote media with the standard image-embed syntax; for
+		// videos the bare URL on its own line renders an embedded player.
+		snippet = mediaType === "image" ? `![](${url})` : url;
+	}
+
+	const ok = await applyEditToFile(app, file, { op: "append", content: snippet });
+	return {
+		ok,
+		message: ok
+			? mediaType === "fact"
+				? "Added the researched info."
+				: `Embedded the ${mediaType} in the note.`
+			: "Could not insert the result.",
+	};
 }
 
 /** Summary of the vault's link graph for analysis / suggestions. */
