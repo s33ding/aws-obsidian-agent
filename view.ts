@@ -325,7 +325,21 @@ export class AgentView extends ItemView {
 
 	private async handleSend(raw: string): Promise<void> {
 		const text = raw.trim();
-		if (!text || this.busy) return;
+		if (!text) return;
+
+		// Typed/explicit input takes priority: if the agent is currently
+		// speaking or processing, interrupt it and handle this message instead.
+		// This keeps the text box fully usable even while talk mode is on.
+		if (this.busy) {
+			this.speechInterrupted = true;
+			this.polly.stop();
+			// Wait briefly for the in-flight turn to unwind before starting.
+			for (let i = 0; i < 40 && this.busy; i++) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+			if (this.busy) return; // still stuck; bail rather than overlap
+		}
+
 		this.inputEl.value = "";
 		this.busy = true;
 		this.speechInterrupted = false;
