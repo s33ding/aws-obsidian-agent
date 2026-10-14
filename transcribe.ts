@@ -14,12 +14,21 @@ const LANG_CODE: Record<AgentLanguage, LanguageCode> = {
 	"en-US": LanguageCode.EN_US,
 };
 
+/** Map a Transcribe language code string back to our AgentLanguage. */
+function toAgentLanguage(code: string | undefined): AgentLanguage | null {
+	if (code === "pt-BR") return "pt-BR";
+	if (code === "en-US") return "en-US";
+	return null;
+}
+
 export interface TranscribeCallbacks {
 	/** Partial (not stabilized) transcript for the current utterance. */
 	onPartial?: (text: string) => void;
 	/** A completed (stabilized) transcript segment. */
 	onFinal: (text: string) => void;
 	onError?: (message: string) => void;
+	/** Fired when the detected language of an utterance is known. */
+	onLanguage?: (lang: AgentLanguage) => void;
 }
 
 /**
@@ -80,7 +89,11 @@ export class TranscribeStream {
 	}
 
 	/** Begin a streaming transcription session for the given language. */
-	async start(lang: AgentLanguage, callbacks: TranscribeCallbacks): Promise<void> {
+	async start(
+		lang: AgentLanguage,
+		callbacks: TranscribeCallbacks,
+		autoDetect = false
+	): Promise<void> {
 		if (this.running) return;
 		this.running = true;
 		this.closed = false;
@@ -88,12 +101,22 @@ export class TranscribeStream {
 
 		const audioStream = this.audioGenerator();
 
-		const command = new StartStreamTranscriptionCommand({
-			LanguageCode: LANG_CODE[lang],
-			MediaEncoding: MediaEncoding.PCM,
-			MediaSampleRateHertz: SAMPLE_RATE,
-			AudioStream: audioStream,
-		});
+		const command = autoDetect
+			? new StartStreamTranscriptionCommand({
+					// Automatic language identification between pt-BR and en-US.
+					IdentifyLanguage: true,
+					LanguageOptions: "pt-BR,en-US",
+					PreferredLanguage: LANG_CODE[lang],
+					MediaEncoding: MediaEncoding.PCM,
+					MediaSampleRateHertz: SAMPLE_RATE,
+					AudioStream: audioStream,
+			  })
+			: new StartStreamTranscriptionCommand({
+					LanguageCode: LANG_CODE[lang],
+					MediaEncoding: MediaEncoding.PCM,
+					MediaSampleRateHertz: SAMPLE_RATE,
+					AudioStream: audioStream,
+			  });
 
 		try {
 			const response = await this.getClient().send(command);
@@ -107,6 +130,9 @@ export class TranscribeStream {
 					const alt = result.Alternatives?.[0];
 					const text = alt?.Transcript?.trim();
 					if (!text) continue;
+					// Report detected language (present when IdentifyLanguage is on).
+					const detected = toAgentLanguage(result.LanguageCode);
+					if (detected) callbacks.onLanguage?.(detected);
 					if (result.IsPartial) {
 						callbacks.onPartial?.(text);
 					} else {

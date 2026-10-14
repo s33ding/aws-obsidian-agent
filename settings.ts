@@ -21,6 +21,9 @@ export interface AgentSettings {
 	temperature: number;
 	includeActiveNote: boolean;
 	maxNoteChars: number;
+	allowEditing: boolean;
+	confirmEdits: boolean;
+	autoDetectLanguage: boolean;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -44,6 +47,9 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	temperature: 0.7,
 	includeActiveNote: true,
 	maxNoteChars: 6000,
+	allowEditing: false,
+	confirmEdits: true,
+	autoDetectLanguage: true,
 };
 
 // Bedrock models verified available in the account (Converse-compatible).

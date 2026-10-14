@@ -7,6 +7,12 @@ import {
 	isSpeechRecognitionSupported,
 	listAudioInputDevices,
 } from "./speech";
+import {
+	NoteEdit,
+	applyEditToFile,
+	describeEdit,
+	parseReply,
+} from "./edit";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -21,6 +27,7 @@ export class AgentView extends ItemView {
 	private langSelectEl!: HTMLSelectElement;
 	private deviceSelectEl!: HTMLSelectElement;
 	private talkBtn!: HTMLButtonElement;
+	private stopBtn!: HTMLButtonElement;
 	private statusEl!: HTMLElement;
 	private meterEl!: HTMLElement;
 	private meterFillEl!: HTMLElement;
@@ -28,6 +35,7 @@ export class AgentView extends ItemView {
 	private speech: SpeechInput | null = null;
 	private talkOn = false;
 	private busy = false;
+	private speechInterrupted = false;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -76,8 +84,13 @@ export class AgentView extends ItemView {
 			this.setLanguage(this.langSelectEl.value as AgentLanguage);
 		});
 
-		const stopBtn = header.createEl("button", { text: "Stop audio", cls: "aws-agent-stop" });
-		stopBtn.addEventListener("click", () => this.polly.stop());
+		const stopBtn = header.createEl("button", {
+			text: this.settings.language === "pt-BR" ? "⏹ Parar fala" : "⏹ Stop",
+			cls: "aws-agent-stop mod-warning",
+			attr: { "aria-label": "Stop speaking" },
+		});
+		this.stopBtn = stopBtn;
+		stopBtn.addEventListener("click", () => this.stopSpeaking());
 
 		// Device row (microphone selector + live meter).
 		const deviceRow = container.createDiv({ cls: "aws-agent-device-row" });
@@ -160,6 +173,22 @@ export class AgentView extends ItemView {
 		this.addMessage("system", note);
 	}
 
+	/**
+	 * Called when Transcribe auto-detects the spoken language. Switches the
+	 * agent + Polly voice to match, WITHOUT restarting the recognition stream
+	 * (auto-detect mode already listens for both languages).
+	 */
+	private onDetectedLanguage(lang: AgentLanguage): void {
+		if (this.settings.language === lang) return;
+		this.settings.language = lang;
+		this.agent.setLanguage(lang);
+		void this.saveSettings();
+		if (this.langSelectEl && this.langSelectEl.value !== lang) {
+			this.langSelectEl.value = lang;
+		}
+		this.updateTalkButton();
+	}
+
 	// ---- Devices + meter ---------------------------------------------------
 
 	private async populateDevices(): Promise<void> {
@@ -211,11 +240,13 @@ export class AgentView extends ItemView {
 				onStart: () => this.setListeningUI(true),
 				onEnd: () => this.setListeningUI(false),
 				onError: (err) => this.onSpeechError(err),
+				onLanguage: (lang) => this.onDetectedLanguage(lang),
 			},
 			this.settings,
 			{
 				deviceId: this.settings.inputDeviceId || undefined,
 				silenceMs: this.settings.silenceMs,
+				autoDetect: this.settings.autoDetectLanguage,
 			}
 		);
 
@@ -295,6 +326,7 @@ export class AgentView extends ItemView {
 		if (!text || this.busy) return;
 		this.inputEl.value = "";
 		this.busy = true;
+		this.speechInterrupted = false;
 		this.speech?.suspend();
 		this.addMessage("user", text);
 
@@ -318,13 +350,19 @@ export class AgentView extends ItemView {
 						(bubble.textContent ? bubble.textContent + " " : "") + sentence;
 					this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 					// Pipe each sentence into the audio queue immediately.
-					if (speak) this.polly.enqueue(sentence, lang);
+					if (speak && !this.speechInterrupted) this.polly.enqueue(sentence, lang);
 				},
 				context
 			);
-			// Ensure final text matches the full reply.
-			bubble.textContent = reply.text;
+			// Parse out any <edit> blocks; show only the clean spoken text.
+			const parsed = parseReply(reply.text);
+			bubble.textContent = parsed.spokenText || reply.text;
 			if (speak) await this.polly.endStream();
+
+			// Handle note edits if the agent proposed any.
+			if (parsed.edits.length > 0) {
+				await this.handleEdits(parsed.edits);
+			}
 		} catch (err) {
 			console.error(err);
 			this.addMessage("system", `Error: ${(err as Error).message}`);
@@ -332,6 +370,15 @@ export class AgentView extends ItemView {
 			this.busy = false;
 			if (this.talkOn) this.speech?.resume();
 		}
+	}
+
+	/** Stop the agent's current speech/playback immediately. */
+	stopSpeaking(): void {
+		this.speechInterrupted = true;
+		this.polly.stop();
+		const pt = this.settings.language === "pt-BR";
+		this.statusEl.show();
+		this.statusEl.setText(pt ? "Fala interrompida." : "Speech stopped.");
 	}
 
 	private async speak(text: string, lang: AgentLanguage): Promise<void> {
@@ -375,6 +422,77 @@ export class AgentView extends ItemView {
 			? `Contexto: a nota que o usuário está vendo agora é "${file.basename}". Conteúdo entre as marcas.`
 			: `Context: the note the user is currently viewing is "${file.basename}". Content is between the markers.`;
 		return `${header}\n<nota>\n${body}\n</nota>`;
+	}
+
+	/**
+	 * Apply or confirm proposed note edits against the active file.
+	 */
+	private async handleEdits(edits: NoteEdit[]): Promise<void> {
+		const pt = this.settings.language === "pt-BR";
+		const file = this.app.workspace.getActiveFile();
+		if (!file || file.extension !== "md") {
+			this.addMessage(
+				"system",
+				pt ? "Nenhuma nota ativa para editar." : "No active note to edit."
+			);
+			return;
+		}
+
+		for (const edit of edits) {
+			if (this.settings.confirmEdits) {
+				await this.confirmAndApply(file, edit, pt);
+			} else {
+				const ok = await applyEditToFile(this.app, file, edit);
+				this.addMessage(
+					"system",
+					ok
+						? (pt ? "✏️ Nota editada: " : "✏️ Note edited: ") + describeEdit(edit)
+						: (pt ? "Não consegui aplicar a edição." : "Could not apply the edit.")
+				);
+			}
+		}
+	}
+
+	/** Render an inline confirmation card with Apply / Reject buttons. */
+	private confirmAndApply(
+		file: import("obsidian").TFile,
+		edit: NoteEdit,
+		pt: boolean
+	): Promise<void> {
+		return new Promise<void>((resolve) => {
+			const card = this.messagesEl.createDiv({ cls: "aws-agent-edit-card" });
+			card.createDiv({
+				cls: "aws-agent-edit-title",
+				text: (pt ? "Edição proposta: " : "Proposed edit: ") + describeEdit(edit),
+			});
+			const btns = card.createDiv({ cls: "aws-agent-edit-btns" });
+			const applyBtn = btns.createEl("button", {
+				text: pt ? "Aplicar" : "Apply",
+				cls: "mod-cta",
+			});
+			const rejectBtn = btns.createEl("button", { text: pt ? "Rejeitar" : "Reject" });
+
+			const finish = (msg: string) => {
+				card.remove();
+				this.addMessage("system", msg);
+				resolve();
+			};
+
+			applyBtn.addEventListener("click", async () => {
+				const ok = await applyEditToFile(this.app, file, edit);
+				finish(
+					ok
+						? (pt ? "✏️ Nota editada." : "✏️ Note edited.")
+						: pt
+						? "Não consegui aplicar (texto não encontrado)."
+						: "Could not apply (text not found)."
+				);
+			});
+			rejectBtn.addEventListener("click", () =>
+				finish(pt ? "Edição rejeitada." : "Edit rejected.")
+			);
+			this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+		});
 	}
 
 	private addMessage(role: "user" | "agent" | "system", text: string): HTMLElement {

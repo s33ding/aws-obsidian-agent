@@ -50,12 +50,32 @@ export class BedrockService {
 	}
 
 	private systemPrompt(lang: AgentLanguage): string {
-		if (this.settings.systemPrompt?.trim()) {
-			return this.settings.systemPrompt.trim();
-		}
-		return lang === "pt-BR"
+		const base = this.settings.systemPrompt?.trim()
+			? this.settings.systemPrompt.trim()
+			: lang === "pt-BR"
 			? "Você é um assistente de voz útil dentro do Obsidian. Responda em português do Brasil, de forma natural, concisa e conversacional, pois sua resposta será lida em voz alta. Evite listas longas, markdown e blocos de código a menos que sejam pedidos."
 			: "You are a helpful voice assistant inside Obsidian. Reply in English, naturally, concisely and conversationally, since your reply will be read aloud. Avoid long lists, markdown, and code blocks unless explicitly requested.";
+
+		if (!this.settings.allowEditing) return base;
+
+		const editProtocol =
+			lang === "pt-BR"
+				? `\n\nVocê pode editar a nota ativa do usuário. Quando o usuário pedir para alterar, escrever ou corrigir a nota, inclua UM bloco de edição no formato exato abaixo, além de uma frase curta falada confirmando a ação. NÃO leia o JSON em voz alta; coloque-o apenas dentro das marcas <edit>.
+Formatos válidos (JSON dentro de <edit></edit>):
+<edit>{"op":"append","content":"texto a adicionar ao final"}</edit>
+<edit>{"op":"prepend","content":"texto a adicionar no início"}</edit>
+<edit>{"op":"replace","find":"texto exato existente","with":"novo texto"}</edit>
+<edit>{"op":"replace_all","content":"novo conteúdo completo da nota"}</edit>
+Use "replace" para mudanças pontuais (o "find" deve existir exatamente na nota). Só use "replace_all" quando reescrever a nota inteira. Faça no máximo uma edição por resposta.`
+				: `\n\nYou can edit the user's active note. When the user asks to change, write, or fix the note, include ONE edit block in the exact format below, plus a short spoken sentence confirming the action. Do NOT read the JSON aloud; put it only inside the <edit> markers.
+Valid formats (JSON inside <edit></edit>):
+<edit>{"op":"append","content":"text to add at the end"}</edit>
+<edit>{"op":"prepend","content":"text to add at the start"}</edit>
+<edit>{"op":"replace","find":"exact existing text","with":"new text"}</edit>
+<edit>{"op":"replace_all","content":"the full new note content"}</edit>
+Use "replace" for targeted changes (the "find" must exist exactly in the note). Only use "replace_all" when rewriting the whole note. Make at most one edit per reply.`;
+
+		return base + editProtocol;
 	}
 
 	/**
@@ -145,12 +165,27 @@ export class BedrockService {
 
 		let full = "";
 		let buffer = "";
+		// Once an <edit> block starts, stop emitting spoken sentences; the edit
+		// JSON must never be spoken. (Per the prompt, prose comes before edits.)
+		let suppressed = false;
 
 		for await (const event of response.stream) {
 			const delta = event.contentBlockDelta?.delta?.text;
 			if (!delta) continue;
 			full += delta;
+			if (suppressed) continue;
+
 			buffer += delta;
+
+			// If an edit block begins, emit any clean prose before it and stop.
+			const editStart = buffer.indexOf("<edit");
+			if (editStart !== -1) {
+				const prose = buffer.slice(0, editStart).trim();
+				if (prose) onSentence(prose);
+				buffer = "";
+				suppressed = true;
+				continue;
+			}
 
 			// Emit complete sentences as soon as a boundary appears.
 			let boundary = findSentenceBoundary(buffer);
@@ -162,9 +197,11 @@ export class BedrockService {
 			}
 		}
 
-		// Flush any trailing text that didn't end with punctuation.
-		const tail = buffer.trim();
-		if (tail) onSentence(tail);
+		// Flush trailing text only if we never entered an edit block.
+		if (!suppressed) {
+			const tail = buffer.trim();
+			if (tail) onSentence(tail);
+		}
 
 		const result = full.trim();
 		if (!result) {

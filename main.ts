@@ -128,7 +128,7 @@ class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Language")
-			.setDesc("Active language for the agent and Polly voice.")
+			.setDesc("Active language for the agent and Polly voice (used as the default/preferred when auto-detect is on).")
 			.addDropdown((dd) => {
 				(Object.keys(LANGUAGE_LABELS) as AgentLanguage[]).forEach((lang) => {
 					dd.addOption(lang, LANGUAGE_LABELS[lang]);
@@ -137,6 +137,16 @@ class AgentSettingTab extends PluginSettingTab {
 					this.plugin.setLanguage(value as AgentLanguage);
 				});
 			});
+
+		new Setting(containerEl)
+			.setName("Auto-detect spoken language")
+			.setDesc("Automatically switch between pt-BR and en-US based on what you say (hands-free voice).")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.autoDetectLanguage).onChange(async (v) => {
+					this.plugin.settings.autoDetectLanguage = v;
+					await this.plugin.saveSettings();
+				})
+			);
 
 		new Setting(containerEl)
 			.setName("Speak responses")
@@ -300,6 +310,26 @@ class AgentSettingTab extends PluginSettingTab {
 						this.plugin.settings.maxNoteChars = v;
 						await this.plugin.saveSettings();
 					})
+			);
+
+		new Setting(containerEl)
+			.setName("Allow note editing")
+			.setDesc("Let the agent modify the active note when you ask it to.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.allowEditing).onChange(async (v) => {
+					this.plugin.settings.allowEditing = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Confirm edits before applying")
+			.setDesc("Show an Apply/Reject card before writing changes to the note (recommended).")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.confirmEdits).onChange(async (v) => {
+					this.plugin.settings.confirmEdits = v;
+					await this.plugin.saveSettings();
+				})
 			);
 
 		containerEl.createEl("h3", { text: "AWS credentials" });

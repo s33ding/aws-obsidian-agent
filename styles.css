@@ -131,3 +131,21 @@
 .aws-agent-talk.is-loud {
 	box-shadow: 0 0 0 3px rgba(80, 200, 120, 0.5);
 }
+
+.aws-agent-edit-card {
+	border: 1px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 8px;
+	margin: 4px 0;
+	background: var(--background-secondary);
+}
+
+.aws-agent-edit-title {
+	font-size: 0.9em;
+	margin-bottom: 6px;
+}
+
+.aws-agent-edit-btns {
+	display: flex;
+	gap: 6px;
+}

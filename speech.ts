@@ -40,6 +40,8 @@ export interface SpeechCallbacks {
 	onError?: (error: string) => void;
 	/** Real-time input level in 0..1, for the mic animation. */
 	onLevel?: (level: number) => void;
+	/** Fired when Transcribe detects the spoken language (auto-detect mode). */
+	onLanguage?: (lang: AgentLanguage) => void;
 }
 
 /**
@@ -56,6 +58,7 @@ export class SpeechInput {
 	private callbacks: SpeechCallbacks;
 	private deviceId: string | undefined;
 	private silenceMs: number;
+	private autoDetect: boolean;
 
 	private stream: MediaStream | null = null;
 	private audioCtx: AudioContext | null = null;
@@ -79,12 +82,13 @@ export class SpeechInput {
 		lang: AgentLanguage,
 		callbacks: SpeechCallbacks,
 		settings: AgentSettings,
-		opts: { deviceId?: string; silenceMs?: number } = {}
+		opts: { deviceId?: string; silenceMs?: number; autoDetect?: boolean } = {}
 	) {
 		this.lang = lang;
 		this.callbacks = callbacks;
 		this.deviceId = opts.deviceId;
 		this.silenceMs = opts.silenceMs ?? 1500;
+		this.autoDetect = opts.autoDetect ?? false;
 		this.transcribe = new TranscribeStream(settings);
 	}
 
@@ -300,18 +304,25 @@ export class SpeechInput {
 
 	private startTranscription(): void {
 		if (!this.active || this.suspended || this.transcribe.isRunning()) return;
-		void this.transcribe.start(this.lang, {
-			onPartial: (text) => {
-				this.partialBuffer = text;
-				this.callbacks.onInterim?.(text);
+		void this.transcribe.start(
+			this.lang,
+			{
+				onPartial: (text) => {
+					this.partialBuffer = text;
+					this.callbacks.onInterim?.(text);
+				},
+				onFinal: (text) => {
+					this.finalBuffer = (this.finalBuffer + " " + text).trim();
+				},
+				onError: (msg) => {
+					this.callbacks.onError?.(msg);
+				},
+				onLanguage: (lang) => {
+					this.callbacks.onLanguage?.(lang);
+				},
 			},
-			onFinal: (text) => {
-				this.finalBuffer = (this.finalBuffer + " " + text).trim();
-			},
-			onError: (msg) => {
-				this.callbacks.onError?.(msg);
-			},
-		});
+			this.autoDetect
+		);
 	}
 
 	private restartTranscription(): void {
