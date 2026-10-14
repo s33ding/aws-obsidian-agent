@@ -40,6 +40,8 @@ export interface SpeechCallbacks {
 	onError?: (error: string) => void;
 	/** Real-time input level in 0..1, for the mic animation. */
 	onLevel?: (level: number) => void;
+	/** Fired when sustained user speech is detected while suspended (barge-in). */
+	onBargeIn?: () => void;
 }
 
 /**
@@ -74,6 +76,10 @@ export class SpeechInput {
 	private partialBuffer = "";
 	private silenceTimer: number | null = null;
 	private speaking = false;
+
+	// Barge-in: consecutive loud frames while suspended trigger an interrupt.
+	private bargeInFrames = 0;
+	private bargeInFired = false;
 
 	constructor(
 		lang: AgentLanguage,
@@ -131,12 +137,17 @@ export class SpeechInput {
 		this.suspended = true;
 		this.clearSilenceTimer();
 		this.transcribe.stop();
+		// Arm barge-in detection for this playback window.
+		this.bargeInFrames = 0;
+		this.bargeInFired = false;
 		this.callbacks.onLevel?.(0);
 	}
 
 	resume(): void {
 		if (!this.active || !this.suspended) return;
 		this.suspended = false;
+		this.bargeInFrames = 0;
+		this.bargeInFired = false;
 		this.finalBuffer = "";
 		this.partialBuffer = "";
 		this.startTranscription();
@@ -247,6 +258,10 @@ export class SpeechInput {
 		if (!analyser) return;
 		const data = new Uint8Array(analyser.fftSize);
 		const SPEECH_THRESHOLD = 0.06;
+		// Barge-in needs a louder, sustained signal to avoid tripping on the
+		// agent's own audio echoing back (echoCancellation also helps here).
+		const BARGE_IN_THRESHOLD = 0.14;
+		const BARGE_IN_FRAMES = 6; // ~6 animation frames of sustained speech
 
 		const tick = () => {
 			if (!this.analyser) return;
@@ -258,13 +273,33 @@ export class SpeechInput {
 			}
 			const rms = Math.sqrt(sum / data.length);
 			const level = Math.min(1, rms * 3);
+
 			if (!this.suspended) {
 				this.callbacks.onLevel?.(level);
 				this.handleVad(rms > SPEECH_THRESHOLD);
+			} else {
+				// Suspended = agent is speaking. Watch for the user interrupting.
+				this.detectBargeIn(rms > BARGE_IN_THRESHOLD, BARGE_IN_FRAMES);
 			}
+
 			this.levelRaf = requestAnimationFrame(tick);
 		};
 		this.levelRaf = requestAnimationFrame(tick);
+	}
+
+	/** Count sustained loud frames while suspended; fire onBargeIn once. */
+	private detectBargeIn(loud: boolean, framesNeeded: number): void {
+		if (this.bargeInFired) return;
+		if (loud) {
+			this.bargeInFrames++;
+			if (this.bargeInFrames >= framesNeeded) {
+				this.bargeInFired = true;
+				this.bargeInFrames = 0;
+				this.callbacks.onBargeIn?.();
+			}
+		} else {
+			this.bargeInFrames = 0;
+		}
 	}
 
 	// ---- Endpointing -------------------------------------------------------

@@ -16,6 +16,7 @@ export class PollyService {
 	private client: PollyClient | null = null;
 	private settingsSnapshot = "";
 	private currentAudio: HTMLAudioElement | null = null;
+	private pendingResolve: (() => void) | null = null;
 
 	constructor(private settings: AgentSettings) {}
 
@@ -92,24 +93,39 @@ export class PollyService {
 		this.currentAudio = audio;
 
 		await new Promise<void>((resolve, reject) => {
-			audio.onended = () => {
+			const finish = () => {
 				URL.revokeObjectURL(url);
+				this.pendingResolve = null;
 				resolve();
+			};
+			// Allow stop() to resolve this promise (e.g. on barge-in).
+			this.pendingResolve = finish;
+			audio.onended = finish;
+			audio.onpause = () => {
+				// A pause we didn't trigger via stop() still ends playback here.
+				if (audio.currentTime === 0 || audio.ended) finish();
 			};
 			audio.onerror = () => {
 				URL.revokeObjectURL(url);
+				this.pendingResolve = null;
 				reject(new Error("Audio playback failed."));
 			};
 			void audio.play().catch(reject);
 		});
 	}
 
-	/** Stop any currently playing audio. */
+	/** Stop any currently playing audio and resolve any pending speak(). */
 	stop(): void {
 		if (this.currentAudio) {
+			this.currentAudio.onpause = null;
 			this.currentAudio.pause();
 			this.currentAudio.currentTime = 0;
 			this.currentAudio = null;
+		}
+		if (this.pendingResolve) {
+			const r = this.pendingResolve;
+			this.pendingResolve = null;
+			r();
 		}
 	}
 }

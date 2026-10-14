@@ -211,6 +211,7 @@ export class AgentView extends ItemView {
 				onStart: () => this.setListeningUI(true),
 				onEnd: () => this.setListeningUI(false),
 				onError: (err) => this.onSpeechError(err),
+				onBargeIn: () => this.onBargeIn(),
 			},
 			this.settings,
 			{
@@ -286,6 +287,22 @@ export class AgentView extends ItemView {
 	private updateTalkButton(): void {
 		this.talkBtn.toggleClass("is-active", this.talkOn);
 		this.talkBtn.setText(this.talkOn ? "🎙️ Talk: ON" : "🎤 Talk");
+	}
+
+	/**
+	 * User started speaking while the agent was talking: stop the agent's
+	 * audio immediately and start listening. The ongoing speak()/handleSend
+	 * flow resumes the mic in its finally block once playback is torn down.
+	 */
+	private onBargeIn(): void {
+		if (!this.talkOn) return;
+		this.polly.stop();
+		this.statusEl.show();
+		this.statusEl.setText(
+			this.settings.language === "pt-BR" ? "Pode falar..." : "Go ahead..."
+		);
+		// Resume recognition right away so we capture the interrupting speech.
+		this.speech?.resume();
 	}
 
 	// ---- Messaging ---------------------------------------------------------
