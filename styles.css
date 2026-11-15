@@ -149,3 +149,27 @@
 	display: flex;
 	gap: 6px;
 }
+
+.aws-agent-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-bottom: 4px;
+}
+
+.aws-agent-attachment {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	background: var(--background-modifier-hover);
+	font-size: var(--font-ui-smaller);
+}
+
+.aws-agent-attachment button {
+	padding: 0 4px;
+	height: auto;
+	box-shadow: none;
+	background: transparent;
+}

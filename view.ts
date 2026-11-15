@@ -25,6 +25,9 @@ export class AgentView extends ItemView {
 
 	private messagesEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
+	private attachmentsEl!: HTMLElement;
+	private pendingImages: NoteImage[] = [];
+	private pendingFiles: { name: string; text: string }[] = [];
 	private langSelectEl!: HTMLSelectElement;
 	private deviceSelectEl!: HTMLSelectElement;
 	private talkBtn!: HTMLButtonElement;
@@ -119,6 +122,10 @@ export class AgentView extends ItemView {
 		this.statusEl = container.createDiv({ cls: "aws-agent-status" });
 		this.statusEl.hide();
 
+		// Strip showing pasted images/files waiting to be sent.
+		this.attachmentsEl = container.createDiv({ cls: "aws-agent-attachments" });
+		this.attachmentsEl.hide();
+
 		// Input row with Talk mode toggle.
 		const inputRow = container.createDiv({ cls: "aws-agent-input-row" });
 		this.talkBtn = inputRow.createEl("button", {
@@ -138,6 +145,8 @@ export class AgentView extends ItemView {
 				void this.handleSend(this.inputEl.value);
 			}
 		});
+
+		this.inputEl.addEventListener("paste", (e) => void this.handlePaste(e));
 
 		const sendBtn = inputRow.createEl("button", { text: "Send", cls: "aws-agent-send" });
 		sendBtn.addEventListener("click", () => void this.handleSend(this.inputEl.value));
@@ -326,7 +335,7 @@ export class AgentView extends ItemView {
 
 	private async handleSend(raw: string): Promise<void> {
 		const text = raw.trim();
-		if (!text) return;
+		if (!text && this.pendingImages.length === 0 && this.pendingFiles.length === 0) return;
 
 		// Typed/explicit input takes priority: if the agent is currently
 		// speaking or processing, interrupt it and handle this message instead.
@@ -345,14 +354,25 @@ export class AgentView extends ItemView {
 		this.busy = true;
 		this.speechInterrupted = false;
 		this.speech?.suspend();
-		this.addMessage("user", text);
+		const attached = [...this.pendingImages.map((i) => i.name), ...this.pendingFiles.map((f) => f.name)];
+		const sentImages = this.pendingImages;
+		const sentFiles = this.pendingFiles;
+		this.pendingImages = [];
+		this.pendingFiles = [];
+		this.renderAttachments();
+		this.addMessage("user", attached.length ? `${text}\n[${attached.join(", ")}]`.trim() : text);
 
 		const lang = this.settings.language;
 		const speak = this.settings.speakResponses;
 
 		// Gather context from the active markdown note, if enabled.
-		const context = await this.buildNoteContext();
-		const images = await this.buildNoteImages();
+		let context = await this.buildNoteContext();
+		for (const f of sentFiles) {
+			context = `${context ? context + "\n\n" : ""}Attached file "${f.name}":\n<file>\n${f.text}\n</file>`;
+		}
+		const noteImages = (await this.buildNoteImages()) ?? [];
+		const allImages = [...sentImages, ...noteImages];
+		const images = allImages.length > 0 ? allImages : undefined;
 
 		// Create a live agent message bubble we append sentences to.
 		const bubble = this.addMessage("agent", "");
@@ -361,7 +381,7 @@ export class AgentView extends ItemView {
 
 		try {
 			const reply = await this.agent.respondStream(
-				text,
+				text || "(see attachment)",
 				(sentence) => {
 					// Append to the visible bubble as it streams in.
 					bubble.textContent =
@@ -388,6 +408,82 @@ export class AgentView extends ItemView {
 		} finally {
 			this.busy = false;
 			if (this.talkOn) this.speech?.resume();
+		}
+	}
+
+	/** Ctrl+V: attach pasted images and files; plain text pastes as usual. */
+	private async handlePaste(e: ClipboardEvent): Promise<void> {
+		const files = Array.from(e.clipboardData?.files ?? []);
+		if (files.length === 0) return;
+		e.preventDefault();
+
+		const formats: Record<string, NoteImage["format"]> = {
+			"image/png": "png",
+			"image/jpeg": "jpeg",
+			"image/gif": "gif",
+			"image/webp": "webp",
+		};
+		const MAX_IMAGE_BYTES = 3_750_000;
+		const MAX_FILE_BYTES = 1_000_000;
+		const stamp = Date.now();
+
+		for (const [i, file] of files.entries()) {
+			const format = formats[file.type];
+			try {
+				if (format) {
+					if (file.size > MAX_IMAGE_BYTES) {
+						new Notice(`${file.name || "Image"} is over 3.75 MB; skipped.`);
+						continue;
+					}
+					const name = file.name && file.name !== "image.png" ? file.name : `pasted-${stamp}-${i + 1}.${format}`;
+					this.pendingImages.push({ name, format, bytes: new Uint8Array(await file.arrayBuffer()) });
+				} else if (file.size <= MAX_FILE_BYTES) {
+					const buf = new Uint8Array(await file.arrayBuffer());
+					// Reject binary content (NUL bytes in the first 8 KB).
+					if (buf.subarray(0, 8192).includes(0)) {
+						new Notice(`${file.name}: binary files are not supported.`);
+						continue;
+					}
+					let text = new TextDecoder().decode(buf);
+					const max = this.settings.maxNoteChars;
+					if (text.length > max) text = text.slice(0, max) + "\n...[truncated]";
+					this.pendingFiles.push({ name: file.name || `pasted-${stamp}-${i + 1}.txt`, text });
+				} else {
+					new Notice(`${file.name} is over 1 MB; skipped.`);
+				}
+			} catch (err) {
+				console.error("Failed to read pasted file:", err);
+				new Notice(`Could not read ${file.name || "pasted file"}.`);
+			}
+		}
+		this.renderAttachments();
+	}
+
+	private renderAttachments(): void {
+		this.attachmentsEl.empty();
+		const items: { name: string; remove: () => void }[] = [
+			...this.pendingImages.map((img) => ({
+				name: img.name,
+				remove: () => (this.pendingImages = this.pendingImages.filter((x) => x !== img)),
+			})),
+			...this.pendingFiles.map((f) => ({
+				name: f.name,
+				remove: () => (this.pendingFiles = this.pendingFiles.filter((x) => x !== f)),
+			})),
+		];
+		if (items.length === 0) {
+			this.attachmentsEl.hide();
+			return;
+		}
+		this.attachmentsEl.show();
+		for (const item of items) {
+			const chip = this.attachmentsEl.createDiv({ cls: "aws-agent-attachment" });
+			chip.createSpan({ text: item.name });
+			const x = chip.createEl("button", { text: "×", attr: { "aria-label": "Remove attachment" } });
+			x.addEventListener("click", () => {
+				item.remove();
+				this.renderAttachments();
+			});
 		}
 	}
 
