@@ -12,7 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
-import { AgentAction, setViewMode, addLink, createNote, openNote, renameNote, deleteNote, researchAndInsert } from "./actions";
+import { AgentAction, setViewMode, addLink, createNote, createFolder, openNote, renameNote, deleteNote, deleteFolder, folderContents, researchAndInsert } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
 
@@ -477,6 +477,9 @@ export class AgentView extends ItemView {
 			} else if (action.kind === "create_note") {
 				const res = await createNote(this.app, action.name, action.content ?? "", true);
 				this.addMessage("system", res.message);
+			} else if (action.kind === "create_folder") {
+				const res = await createFolder(this.app, action.path);
+				this.addMessage("system", res.message);
 			} else if (action.kind === "open_note") {
 				const res = await openNote(this.app, action.name);
 				this.addMessage("system", res.message);
@@ -488,6 +491,21 @@ export class AgentView extends ItemView {
 				const confirmed = await this.confirmDelete(action.name, pt);
 				if (confirmed) {
 					const res = await deleteNote(this.app, action.name);
+					this.addMessage("system", res.message);
+				} else {
+					this.addMessage("system", pt ? "Exclusão cancelada." : "Deletion cancelled.");
+				}
+			} else if (action.kind === "delete_folder") {
+				// Destructive: always confirm, showing how much will be removed.
+				const c = folderContents(this.app, action.path);
+				const detail = c
+					? pt
+						? ` (${c.files} arquivo(s), ${c.folders} subpasta(s))`
+						: ` (${c.files} file(s), ${c.folders} subfolder(s))`
+					: "";
+				const confirmed = await this.confirmDelete(action.path + detail, pt, true);
+				if (confirmed) {
+					const res = await deleteFolder(this.app, action.path);
 					this.addMessage("system", res.message);
 				} else {
 					this.addMessage("system", pt ? "Exclusão cancelada." : "Deletion cancelled.");
@@ -539,12 +557,12 @@ export class AgentView extends ItemView {
 
 	/** Render an inline confirmation card with Apply / Reject buttons. */
 	/** Inline Yes/No confirmation for a destructive delete. */
-	private confirmDelete(name: string, pt: boolean): Promise<boolean> {
+	private confirmDelete(name: string, pt: boolean, isFolder = false): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
 			const card = this.messagesEl.createDiv({ cls: "aws-agent-edit-card" });
 			card.createDiv({
 				cls: "aws-agent-edit-title",
-				text: (pt ? "Excluir a nota " : "Delete note ") + `"${name}"?`,
+				text: (isFolder ? (pt ? "Excluir a pasta " : "Delete folder ") : pt ? "Excluir a nota " : "Delete note ") + `"${name}"?`,
 			});
 			const btns = card.createDiv({ cls: "aws-agent-edit-btns" });
 			const yes = btns.createEl("button", { text: pt ? "Excluir" : "Delete", cls: "mod-warning" });

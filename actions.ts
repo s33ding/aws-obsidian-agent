@@ -1,4 +1,4 @@
-import { App, MarkdownView, TFile } from "obsidian";
+import { App, MarkdownView, TFile, TFolder } from "obsidian";
 import { NoteEdit, applyEditToFile } from "./edit";
 import { KiroResearch, firstUrl } from "./kirocli";
 
@@ -12,9 +12,11 @@ export type AgentAction =
 	| { kind: "set_view_mode"; mode: "source" | "preview" }
 	| { kind: "add_link"; target: string; alias?: string }
 	| { kind: "create_note"; name: string; content?: string; open?: boolean }
+	| { kind: "create_folder"; path: string }
 	| { kind: "open_note"; name: string }
 	| { kind: "rename_note"; name: string; newName: string }
 	| { kind: "delete_note"; name: string }
+	| { kind: "delete_folder"; path: string }
 	| { kind: "research_media"; query: string; mediaType: "image" | "video" | "fact" };
 
 export interface ActionResult {
@@ -143,6 +145,43 @@ export async function createNote(
 	}
 }
 
+/**
+ * Create a folder (and any missing parent folders) at the given vault path.
+ * If the folder already exists, nothing is changed.
+ */
+export async function createFolder(app: App, path: string): Promise<ActionResult> {
+	const clean = path
+		.trim()
+		.replace(/\\/g, "/")
+		.split("/")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0)
+		.join("/");
+	if (!clean || clean.split("/").some((s) => s === "." || s === "..")) {
+		return { ok: false, message: `Invalid folder path "${path}".` };
+	}
+	const existing = app.vault.getAbstractFileByPath(clean);
+	if (existing instanceof TFolder) {
+		return { ok: true, message: `Folder "${clean}" already exists.` };
+	}
+	if (existing) {
+		return { ok: false, message: `"${clean}" already exists as a file.` };
+	}
+	try {
+		// createFolder() doesn't create missing parents, so build each level.
+		let current = "";
+		for (const part of clean.split("/")) {
+			current = current ? `${current}/${part}` : part;
+			if (!app.vault.getAbstractFileByPath(current)) {
+				await app.vault.createFolder(current);
+			}
+		}
+		return { ok: true, message: `Created folder "${clean}".` };
+	} catch (e) {
+		return { ok: false, message: `Could not create folder: ${(e as Error).message}` };
+	}
+}
+
 /** Open (switch to) an existing note in the current tab. */
 export async function openNote(app: App, name: string): Promise<ActionResult> {
 	const file = findNote(app, name);
@@ -189,6 +228,56 @@ export async function deleteNote(app: App, name: string): Promise<ActionResult> 
 		return { ok: true, message: `Deleted "${label}" (moved to trash).` };
 	} catch (e) {
 		return { ok: false, message: `Could not delete: ${(e as Error).message}` };
+	}
+}
+
+/** Count files and subfolders inside a folder (recursive). */
+export function folderContents(app: App, path: string): { files: number; folders: number } | null {
+	const folder = findFolder(app, path);
+	if (!folder) return null;
+	let files = 0;
+	let folders = 0;
+	const walk = (f: TFolder) => {
+		for (const child of f.children) {
+			if (child instanceof TFolder) {
+				folders++;
+				walk(child);
+			} else {
+				files++;
+			}
+		}
+	};
+	walk(folder);
+	return { files, folders };
+}
+
+function findFolder(app: App, path: string): TFolder | null {
+	const clean = path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	if (!clean) return null;
+	const exact = app.vault.getAbstractFileByPath(clean);
+	if (exact instanceof TFolder) return exact;
+	// Fall back to a case-insensitive match on path or folder name.
+	const lower = clean.toLowerCase();
+	const matches = app.vault
+		.getAllLoadedFiles()
+		.filter(
+			(f): f is TFolder =>
+				f instanceof TFolder && !f.isRoot() && (f.path.toLowerCase() === lower || f.name.toLowerCase() === lower)
+		);
+	return matches.length === 1 ? matches[0] : null;
+}
+
+/** Delete a folder and everything in it (moved to the vault's .trash, recoverable). */
+export async function deleteFolder(app: App, path: string): Promise<ActionResult> {
+	const folder = findFolder(app, path);
+	if (!folder) return { ok: false, message: `Folder "${path}" not found (or name is ambiguous; use the full path).` };
+	if (folder.isRoot()) return { ok: false, message: "Refusing to delete the vault root." };
+	const label = folder.path;
+	try {
+		await app.vault.trash(folder, false);
+		return { ok: true, message: `Deleted folder "${label}" (moved to trash).` };
+	} catch (e) {
+		return { ok: false, message: `Could not delete folder: ${(e as Error).message}` };
 	}
 }
 

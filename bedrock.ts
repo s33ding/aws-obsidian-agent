@@ -73,9 +73,11 @@ export class BedrockService {
 				? `\n\nFerramentas disponíveis — CHAME direto, sem pedir permissão nem repetir o conteúdo na fala:
 - edit_note: alterar a nota ativa (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
 - create_note: criar uma nota nova (name, content opcional) e abri-la.
+- create_folder: criar uma pasta (path, ex.: "Projetos/2025"); pastas pai são criadas se faltarem.
 - open_note: abrir/trocar para outra nota existente.
 - rename_note: renomear uma nota (name, newName).
 - delete_note: excluir uma nota (vai para a lixeira; só quando o usuário pedir claramente).
+- delete_folder: excluir uma pasta e tudo dentro dela (vai para a lixeira; só quando o usuário pedir claramente).
 - set_view_mode: trocar a aba entre edição ("source") e leitura ("preview").
 - add_link: melhorar o grafo adicionando um [[link]] da nota ativa para outra nota.
 - research_media: pesquisar na internet e inserir na nota — imagem/vídeo (embed) ou informação atual (preços AWS, estatísticas, notícias) como texto.
@@ -83,9 +85,11 @@ Para melhorar o grafo do Obsidian, conecte notas relacionadas com add_link (link
 				: `\n\nAvailable tools — CALL them directly, don't ask permission or repeat the content in speech:
 - edit_note: change the active note (add_list_item, insert_under_heading, toggle_task, replace, append/prepend, replace_all).
 - create_note: create a new note (name, optional content) and open it.
+- create_folder: create a folder (path, e.g. "Projects/2025"); missing parent folders are created.
 - open_note: open/switch to another existing note.
 - rename_note: rename a note (name, newName).
 - delete_note: delete a note (moves to trash; only when the user clearly asks).
+- delete_folder: delete a folder and everything in it (moves to trash; only when the user clearly asks).
 - set_view_mode: switch the tab between editing ("source") and reading ("preview").
 - add_link: improve the graph by adding a [[link]] from the active note to another note.
 - research_media: search the internet and insert into the note — image/video (embed) or current info (AWS prices, statistics, news) as text.
@@ -298,6 +302,25 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				},
 			},
 		};
+		const createFolderTool: Tool = {
+			toolSpec: {
+				name: "create_folder",
+				description:
+					"Create a folder in the vault. Missing parent folders are created too. Use when the user asks for a new folder/directory.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							path: {
+								type: "string",
+								description: "Vault-relative folder path, e.g. 'Projects/2025'.",
+							},
+						},
+						required: ["path"],
+					},
+				},
+			},
+		};
 		const deleteNoteTool: Tool = {
 			toolSpec: {
 				name: "delete_note",
@@ -310,6 +333,22 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 							name: { type: "string", description: "Name or path of the note to delete." },
 						},
 						required: ["name"],
+					},
+				},
+			},
+		};
+		const deleteFolderTool: Tool = {
+			toolSpec: {
+				name: "delete_folder",
+				description:
+					"Delete a folder and all its contents (moved to trash, recoverable). Use only when the user clearly asks to delete/remove a folder.",
+				inputSchema: {
+					json: {
+						type: "object",
+						properties: {
+							path: { type: "string", description: "Vault-relative folder path, e.g. 'Projects/2025'." },
+						},
+						required: ["path"],
 					},
 				},
 			},
@@ -344,9 +383,11 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				setViewMode,
 				addLink,
 				createNoteTool,
+				createFolderTool,
 				openNoteTool,
 				renameNoteTool,
 				deleteNoteTool,
+				deleteFolderTool,
 				researchMediaTool,
 			],
 		};
@@ -533,12 +574,16 @@ function toAgentAction(name: string | undefined, input: unknown): AgentAction | 
 						content: typeof o.content === "string" ? o.content : undefined,
 				  }
 				: null;
+		case "create_folder":
+			return typeof o.path === "string" ? { kind: "create_folder", path: o.path } : null;
 		case "open_note":
 			return typeof o.name === "string" ? { kind: "open_note", name: o.name } : null;
 		case "rename_note":
 			return typeof o.name === "string" && typeof o.newName === "string"
 				? { kind: "rename_note", name: o.name, newName: o.newName }
 				: null;
+		case "delete_folder":
+			return typeof o.path === "string" ? { kind: "delete_folder", path: o.path } : null;
 		case "delete_note":
 			return typeof o.name === "string" ? { kind: "delete_note", name: o.name } : null;
 		case "research_media":
