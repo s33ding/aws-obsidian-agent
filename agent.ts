@@ -1,4 +1,4 @@
-import { BedrockService, ChatTurn } from "./bedrock";
+import { BedrockService, ChatTurn, NoteImage } from "./bedrock";
 import { AgentLanguage, AgentSettings } from "./settings";
 import { AgentAction } from "./actions";
 
@@ -82,7 +82,8 @@ export class Agent {
 	async respondStream(
 		message: string,
 		onSentence: (sentence: string) => void,
-		context?: string
+		context?: string,
+		images?: NoteImage[]
 	): Promise<AgentReply> {
 		const msg = message.trim();
 		if (!msg) {
@@ -101,7 +102,8 @@ export class Agent {
 						msg,
 						this.history,
 						this.lang,
-						context
+						context,
+						images
 					);
 					onSentence(result.text);
 					this.history.push({ role: "user", text: msg });
@@ -115,7 +117,8 @@ export class Agent {
 					this.history,
 					this.lang,
 					onSentence,
-					context
+					context,
+					images
 				);
 				// Store only the user's own message in history, not the note
 				// context (which can change and would bloat later turns).

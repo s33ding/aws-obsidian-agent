@@ -393,6 +393,16 @@ class AgentSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Include images from the note")
+			.setDesc("Send images embedded in the active note (png, jpg, gif, webp; up to 5, max 3.75 MB each) so the agent can see them.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.includeNoteImages).onChange(async (v) => {
+					this.plugin.settings.includeNoteImages = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
 			.setName("Max note characters")
 			.setDesc("Cap how much of the active note is sent as context (controls token usage).")
 			.addSlider((s) =>

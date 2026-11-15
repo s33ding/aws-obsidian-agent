@@ -21,6 +21,7 @@ export interface AgentSettings {
 	temperature: number;
 	includeActiveNote: boolean;
 	maxNoteChars: number;
+	includeNoteImages: boolean;
 	allowEditing: boolean;
 	confirmEdits: boolean;
 	autoDetectLanguage: boolean;
@@ -47,6 +48,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 	temperature: 0.6,
 	includeActiveNote: true,
 	maxNoteChars: 6000,
+	includeNoteImages: true,
 	allowEditing: true,
 	confirmEdits: false,
 	autoDetectLanguage: false,

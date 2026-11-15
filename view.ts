@@ -12,6 +12,7 @@ import {
 	applyEditToFile,
 	describeEdit,
 } from "./edit";
+import { NoteImage } from "./bedrock";
 import { AgentAction, setViewMode, addLink, createNote, createFolder, openNote, renameNote, deleteNote, deleteFolder, folderContents, researchAndInsert } from "./actions";
 
 export const VIEW_TYPE_AGENT = "aws-obsidian-agent-view";
@@ -351,6 +352,7 @@ export class AgentView extends ItemView {
 
 		// Gather context from the active markdown note, if enabled.
 		const context = await this.buildNoteContext();
+		const images = await this.buildNoteImages();
 
 		// Create a live agent message bubble we append sentences to.
 		const bubble = this.addMessage("agent", "");
@@ -368,7 +370,8 @@ export class AgentView extends ItemView {
 					// Pipe each sentence into the audio queue immediately.
 					if (speak && !this.speechInterrupted) this.polly.enqueue(sentence, lang);
 				},
-				context
+				context,
+				images
 			);
 			// Show the final spoken text in the bubble.
 			bubble.textContent = reply.text;
@@ -452,6 +455,51 @@ export class AgentView extends ItemView {
 			? `Contexto: a nota que o usuário está vendo agora é "${file.basename}". Conteúdo entre as marcas.`
 			: `Context: the note the user is currently viewing is "${file.basename}". Content is between the markers.`;
 		return `${header}\n<nota>\n${body}\n</nota>`;
+	}
+
+	/**
+	 * Collect images embedded in the active note (![[img.png]] or ![](img.png))
+	 * so the model can see them. Only vault files are read; remote URLs are
+	 * skipped. Bedrock accepts png/jpeg/gif/webp up to 3.75 MB each.
+	 */
+	private async buildNoteImages(): Promise<NoteImage[] | undefined> {
+		if (!this.settings.includeActiveNote || !this.settings.includeNoteImages) return undefined;
+
+		const file = this.app.workspace.getActiveFile();
+		if (!file || file.extension !== "md") return undefined;
+
+		const embeds = this.app.metadataCache.getFileCache(file)?.embeds ?? [];
+		const formats: Record<string, NoteImage["format"]> = {
+			png: "png",
+			jpg: "jpeg",
+			jpeg: "jpeg",
+			gif: "gif",
+			webp: "webp",
+		};
+		const MAX_IMAGES = 5;
+		const MAX_BYTES = 3_750_000;
+		const seen = new Set<string>();
+		const images: NoteImage[] = [];
+
+		for (const embed of embeds) {
+			if (images.length >= MAX_IMAGES) break;
+			const target = this.app.metadataCache.getFirstLinkpathDest(embed.link.split("|")[0], file.path);
+			if (!target || seen.has(target.path)) continue;
+			const format = formats[target.extension.toLowerCase()];
+			if (!format) continue;
+			seen.add(target.path);
+			if (target.stat.size > MAX_BYTES) {
+				console.warn(`[agent] skipping image over 3.75 MB: ${target.path}`);
+				continue;
+			}
+			try {
+				const bytes = new Uint8Array(await this.app.vault.readBinary(target));
+				images.push({ name: target.name, format, bytes });
+			} catch (err) {
+				console.error("Failed to read image:", target.path, err);
+			}
+		}
+		return images.length > 0 ? images : undefined;
 	}
 
 	/** Dispatch structured agent actions (edits, view mode, graph links). */

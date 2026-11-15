@@ -2,7 +2,9 @@ import {
 	BedrockRuntimeClient,
 	ConverseCommand,
 	ConverseStreamCommand,
+	ContentBlock,
 	ConversationRole,
+	ImageFormat,
 	Message,
 	Tool,
 	ToolConfiguration,
@@ -14,6 +16,25 @@ import { AgentAction } from "./actions";
 export interface ChatTurn {
 	role: "user" | "assistant";
 	text: string;
+}
+
+/** An image sent to the model alongside the user's message. */
+export interface NoteImage {
+	name: string;
+	format: "png" | "jpeg" | "gif" | "webp";
+	bytes: Uint8Array;
+}
+
+/** Build the current user turn: note context text, images, then the message. */
+function userContent(userText: string, context?: string, images?: NoteImage[]): ContentBlock[] {
+	const blocks: ContentBlock[] = [];
+	if (context?.trim()) blocks.push({ text: context.trim() });
+	for (const img of images ?? []) {
+		blocks.push({ text: `Image: ${img.name}` });
+		blocks.push({ image: { format: img.format as ImageFormat, source: { bytes: img.bytes } } });
+	}
+	blocks.push({ text: userText });
+	return blocks;
 }
 
 /** Result of a tool-enabled turn: spoken text and any actions to perform. */
@@ -402,7 +423,8 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 		userText: string,
 		history: ChatTurn[],
 		lang: AgentLanguage,
-		context?: string
+		context?: string,
+		images?: NoteImage[]
 	): Promise<ToolReply> {
 		const messages: Message[] = [];
 		for (const turn of history) {
@@ -411,10 +433,7 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 				content: [{ text: turn.text }],
 			});
 		}
-		const userContent = context?.trim()
-			? [{ text: context.trim() }, { text: userText }]
-			: [{ text: userText }];
-		messages.push({ role: ConversationRole.USER, content: userContent });
+		messages.push({ role: ConversationRole.USER, content: userContent(userText, context, images) });
 
 		const command = new ConverseCommand({
 			modelId: this.settings.bedrockModelId,
@@ -465,7 +484,8 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 		history: ChatTurn[],
 		lang: AgentLanguage,
 		onSentence: (sentence: string) => void,
-		context?: string
+		context?: string,
+		images?: NoteImage[]
 	): Promise<string> {
 		const messages: Message[] = [];
 		for (const turn of history) {
@@ -478,10 +498,7 @@ To improve the Obsidian graph, connect related notes with add_link (links form t
 		// If note context is provided, prepend it as a separate text block in
 		// the current user turn so the model can reference what the user is
 		// looking at. History stores only the raw user message (set by caller).
-		const userContent = context?.trim()
-			? [{ text: context.trim() }, { text: userText }]
-			: [{ text: userText }];
-		messages.push({ role: ConversationRole.USER, content: userContent });
+		messages.push({ role: ConversationRole.USER, content: userContent(userText, context, images) });
 
 		const command = new ConverseStreamCommand({
 			modelId: this.settings.bedrockModelId,
